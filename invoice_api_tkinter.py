@@ -14,6 +14,7 @@ from typing import Any
 from urllib import error, request
 
 API_URL_DEFAULT = "https://integracion.ebi-pac.com/api/Enviar"
+AUTH_URL_DEFAULT = "https://integracion.ebi-pac.com/api/Autenticacion"
 TOKEN_DEFAULT = "vvslrbtgvsux_ws_ebi"
 
 
@@ -303,6 +304,10 @@ class App(tk.Tk):
         self.payload: dict[str, Any] | None = None
 
         self.url_var = tk.StringVar(value=API_URL_DEFAULT)
+        self.auth_url_var = tk.StringVar(value=AUTH_URL_DEFAULT)
+        self.auth_bearer_var = tk.StringVar(value=TOKEN_DEFAULT)
+        self.username_var = tk.StringVar(value="")
+        self.password_var = tk.StringVar(value="")
         self.token_var = tk.StringVar(value=TOKEN_DEFAULT)
         self.file_var = tk.StringVar(value="")
 
@@ -315,14 +320,31 @@ class App(tk.Tk):
         ttk.Label(top, text="API URL").grid(row=0, column=0, sticky="w")
         ttk.Entry(top, textvariable=self.url_var, width=80).grid(row=0, column=1, padx=5, sticky="we")
 
-        ttk.Label(top, text="Bearer Token").grid(row=1, column=0, sticky="w")
-        ttk.Entry(top, textvariable=self.token_var, width=80, show="*").grid(row=1, column=1, padx=5, sticky="we")
+        ttk.Label(top, text="Auth URL").grid(row=1, column=0, sticky="w")
+        ttk.Entry(top, textvariable=self.auth_url_var, width=80).grid(row=1, column=1, padx=5, sticky="we")
 
-        ttk.Button(top, text="Load TSV", command=self.load_file).grid(row=2, column=0, pady=8, sticky="w")
-        ttk.Entry(top, textvariable=self.file_var, width=80).grid(row=2, column=1, padx=5, sticky="we")
+        ttk.Label(top, text="Auth Bearer").grid(row=2, column=0, sticky="w")
+        ttk.Entry(top, textvariable=self.auth_bearer_var, width=80, show="*").grid(row=2, column=1, padx=5, sticky="we")
+
+        creds = ttk.Frame(top)
+        creds.grid(row=3, column=1, sticky="we", pady=5)
+        creds.columnconfigure(1, weight=1)
+        creds.columnconfigure(3, weight=1)
+
+        ttk.Label(creds, text="Usuario").grid(row=0, column=0, sticky="w")
+        ttk.Entry(creds, textvariable=self.username_var, width=30).grid(row=0, column=1, padx=(5, 12), sticky="we")
+        ttk.Label(creds, text="Clave").grid(row=0, column=2, sticky="w")
+        ttk.Entry(creds, textvariable=self.password_var, width=30, show="*").grid(row=0, column=3, padx=5, sticky="we")
+        ttk.Button(creds, text="Obtener Token", command=self.get_auth_token).grid(row=0, column=4, padx=5, sticky="e")
+
+        ttk.Label(top, text="Bearer Token").grid(row=4, column=0, sticky="w")
+        ttk.Entry(top, textvariable=self.token_var, width=80, show="*").grid(row=4, column=1, padx=5, sticky="we")
+
+        ttk.Button(top, text="Load TSV", command=self.load_file).grid(row=5, column=0, pady=8, sticky="w")
+        ttk.Entry(top, textvariable=self.file_var, width=80).grid(row=5, column=1, padx=5, sticky="we")
 
         btns = ttk.Frame(top)
-        btns.grid(row=3, column=1, sticky="w", pady=8)
+        btns.grid(row=6, column=1, sticky="w", pady=8)
         ttk.Button(btns, text="Build Payload", command=self.make_payload).pack(side="left", padx=4)
         ttk.Button(btns, text="Send Request", command=self.send_request).pack(side="left", padx=4)
 
@@ -372,6 +394,62 @@ class App(tk.Tk):
 
         self.payload = build_payload(self.parsed_data)
         self._write_json(self.output_text, self.payload)
+
+    def get_auth_token(self) -> None:
+        username = self.username_var.get().strip()
+        password = self.password_var.get().strip()
+        auth_bearer = self.auth_bearer_var.get().strip()
+        auth_url = self.auth_url_var.get().strip()
+
+        if not username or not password:
+            messagebox.showwarning("Credenciales incompletas", "Ingresa usuario y clave para obtener el token.")
+            return
+        if not auth_bearer:
+            messagebox.showwarning("Bearer faltante", "Ingresa el bearer de autenticación.")
+            return
+        if not auth_url:
+            messagebox.showwarning("URL faltante", "Ingresa la URL de autenticación.")
+            return
+
+        auth_payload = {"usuario": username, "clave": password}
+        req = request.Request(
+            auth_url,
+            data=json.dumps(auth_payload).encode("utf-8"),
+            method="POST",
+            headers={
+                "accept": "*/*",
+                "Authorization": f"Bearer {auth_bearer}",
+                "Content-Type": "application/json",
+            },
+        )
+
+        try:
+            with request.urlopen(req, timeout=45) as resp:
+                response_body = resp.read().decode("utf-8", errors="replace")
+                data = json.loads(response_body)
+                token = (data.get("token") or "").strip()
+                if not token:
+                    raise ValueError("La respuesta no contiene un token válido.")
+
+                self.token_var.set(token)
+                expiracion = data.get("expiracion", "N/D")
+                self._write(
+                    self.output_text,
+                    "Token obtenido y guardado para el envío de la factura.\n\n"
+                    f"Expiración: {expiracion}\n\n"
+                    f"Respuesta completa:\n{json.dumps(data, indent=2, ensure_ascii=False)}",
+                )
+                messagebox.showinfo("Token generado", "Token obtenido correctamente y cargado en Bearer Token.")
+        except error.HTTPError as exc:
+            error_body = exc.read().decode("utf-8", errors="replace")
+            self._write(self.output_text, f"HTTPError {exc.code}\n{error_body}")
+            messagebox.showerror("Error de autenticación", f"{exc.code}: {exc.reason}")
+        except json.JSONDecodeError:
+            self._write(self.output_text, "La respuesta de autenticación no es JSON válido.")
+            messagebox.showerror("Error de autenticación", "La respuesta no tiene formato JSON válido.")
+        except Exception as exc:  # noqa: BLE001
+            self._write(self.output_text, f"Error: {exc}")
+            messagebox.showerror("Error de autenticación", str(exc))
 
     def send_request(self) -> None:
         if not self.payload:
