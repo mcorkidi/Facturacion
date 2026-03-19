@@ -52,7 +52,7 @@ class InvoiceParser:
         grand_total = 0.0
         item_header_index: dict[str, int] | None = None
 
-        with open(file_path, "r", encoding="utf-8", newline="") as f:
+        with open(file_path, "r", encoding="latin-1", newline="") as f:
             reader = csv.reader(f, delimiter="\t")
             for row in reader:
                 normalized_row = [cls._normalize_space(c) for c in row]
