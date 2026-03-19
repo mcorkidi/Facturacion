@@ -10,12 +10,12 @@ import json
 import os
 import tkinter as tk
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
 from urllib import error, request
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 API_URL_DEFAULT = "https://integracion.ebi-pac.com/api/Enviar"
 AUTH_URL_DEFAULT = "https://integracion.ebi-pac.com/api/Autenticacion"
@@ -190,7 +190,11 @@ class InvoiceParser:
 
 
 def build_payload(parsed: dict[str, Any]) -> dict[str, Any]:
-    fecha_emision = datetime.now(ZoneInfo("America/Panama")).isoformat(timespec="seconds")
+    try:
+        panama_tz = ZoneInfo("America/Panama")
+    except ZoneInfoNotFoundError:
+        panama_tz = timezone(timedelta(hours=-5))
+    fecha_emision = datetime.now(panama_tz).isoformat(timespec="seconds")
     issue_date = parsed.get("issue_date") or datetime.now().strftime("%d-%b-%y").upper()
 
     items = [
