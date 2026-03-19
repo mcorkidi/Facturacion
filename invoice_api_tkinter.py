@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import csv
+import base64
+import hashlib
 import json
+import os
 import tkinter as tk
 from dataclasses import dataclass
 from datetime import datetime
@@ -16,6 +19,7 @@ from urllib import error, request
 API_URL_DEFAULT = "https://integracion.ebi-pac.com/api/Enviar"
 AUTH_URL_DEFAULT = "https://integracion.ebi-pac.com/api/Autenticacion"
 TOKEN_DEFAULT = "vvslrbtgvsux_ws_ebi"
+CREDENTIALS_FILE = Path.home() / ".facturacion_credentials.json"
 
 
 @dataclass
@@ -312,6 +316,60 @@ class App(tk.Tk):
         self.file_var = tk.StringVar(value="")
 
         self._build_ui()
+        self._load_saved_credentials()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    @staticmethod
+    def _machine_secret() -> bytes:
+        system_hint = f"{os.name}|{os.getenv('USER', '')}|{os.getenv('USERNAME', '')}"
+        return hashlib.sha256(system_hint.encode("utf-8")).digest()
+
+    @classmethod
+    def _encrypt_text(cls, plain_text: str) -> dict[str, str]:
+        salt = os.urandom(16)
+        key = hashlib.pbkdf2_hmac("sha256", cls._machine_secret(), salt, 150_000, dklen=32)
+        plain_bytes = plain_text.encode("utf-8")
+        encrypted = bytes(b ^ key[i % len(key)] for i, b in enumerate(plain_bytes))
+        return {
+            "salt": base64.b64encode(salt).decode("utf-8"),
+            "value": base64.b64encode(encrypted).decode("utf-8"),
+        }
+
+    @classmethod
+    def _decrypt_text(cls, payload: dict[str, str]) -> str:
+        salt = base64.b64decode(payload["salt"].encode("utf-8"))
+        encrypted = base64.b64decode(payload["value"].encode("utf-8"))
+        key = hashlib.pbkdf2_hmac("sha256", cls._machine_secret(), salt, 150_000, dklen=32)
+        plain_bytes = bytes(b ^ key[i % len(key)] for i, b in enumerate(encrypted))
+        return plain_bytes.decode("utf-8")
+
+    def _save_credentials(self) -> None:
+        username = self.username_var.get().strip()
+        password = self.password_var.get().strip()
+        if not username or not password:
+            return
+        payload = {
+            "username": self._encrypt_text(username),
+            "password": self._encrypt_text(password),
+        }
+        CREDENTIALS_FILE.write_text(json.dumps(payload), encoding="utf-8")
+
+    def _load_saved_credentials(self) -> None:
+        if not CREDENTIALS_FILE.exists():
+            return
+        try:
+            payload = json.loads(CREDENTIALS_FILE.read_text(encoding="utf-8"))
+            username = self._decrypt_text(payload["username"])
+            password = self._decrypt_text(payload["password"])
+            self.username_var.set(username)
+            self.password_var.set(password)
+        except Exception:  # noqa: BLE001
+            # If decryption fails (different machine/user/corrupt file), ignore and let user re-enter.
+            return
+
+    def _on_close(self) -> None:
+        self._save_credentials()
+        self.destroy()
 
     def _build_ui(self) -> None:
         top = ttk.Frame(self, padding=10)
@@ -439,6 +497,7 @@ class App(tk.Tk):
                     f"Expiración: {expiracion}\n\n"
                     f"Respuesta completa:\n{json.dumps(data, indent=2, ensure_ascii=False)}",
                 )
+                self._save_credentials()
                 messagebox.showinfo("Token generado", "Token obtenido correctamente y cargado en Bearer Token.")
         except error.HTTPError as exc:
             error_body = exc.read().decode("utf-8", errors="replace")
