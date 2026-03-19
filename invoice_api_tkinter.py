@@ -213,7 +213,7 @@ def build_payload(parsed: dict[str, Any]) -> dict[str, Any]:
 
     payload = {
         "documento": {
-            "codigoSucursalEmisor": "001",
+            "codigoSucursalEmisor": "0000",
             "tipoSucursal": "1",
             "datosTransaccion": {
                 "tipoEmision": "01",
@@ -222,8 +222,8 @@ def build_payload(parsed: dict[str, Any]) -> dict[str, Any]:
                 "tipoDocumento": "01",
                 "numeroDocumentoFiscal": parsed.get("invoice_number", ""),
                 "puntoFacturacionFiscal": "001",
-                "fechaEmision": fecha_emision,
-                "fechaSalida": fecha_emision,
+                "fechaEmision": "",
+                "fechaSalida": "",
                 "naturalezaOperacion": "01",
                 "tipoOperacion": "1",
                 "destinoOperacion": "2",
