@@ -50,12 +50,14 @@ class InvoiceParser:
         items: list[InvoiceItem] = []
         subtotal = 0.0
         grand_total = 0.0
+        item_header_index: dict[str, int] | None = None
 
         with open(file_path, "r", encoding="utf-8", newline="") as f:
             reader = csv.reader(f, delimiter="\t")
             for row in reader:
-                cells = [cls._normalize_space(c) for c in row if cls._normalize_space(c)]
-                if not cells:
+                normalized_row = [cls._normalize_space(c) for c in row]
+                cells = [c for c in normalized_row if c]
+                if not cells and item_header_index is None:
                     continue
 
                 if not invoice_number and "Factura Comercial No." in cells:
@@ -87,6 +89,60 @@ class InvoiceParser:
                     total_idx = cells.index("Monto Total :")
                     if total_idx + 1 < len(cells):
                         grand_total = cls._to_float(cells[total_idx + 1])
+
+                if item_header_index is None and {"Referencia", "Descripcion"}.issubset(set(cells)):
+                    item_header_index = {
+                        value: idx
+                        for idx, value in enumerate(normalized_row)
+                        if value in {"Referencia", "Descripcion", "Cantidad", "Unidad", "Precio Unitario", "Total"}
+                    }
+                    continue
+
+                if item_header_index is not None:
+                    ref_idx = item_header_index.get("Referencia")
+                    desc_idx = item_header_index.get("Descripcion")
+                    qty_idx = item_header_index.get("Cantidad")
+                    unit_idx = item_header_index.get("Unidad")
+                    price_idx = item_header_index.get("Precio Unitario")
+                    total_idx = item_header_index.get("Total")
+
+                    if ref_idx is None or desc_idx is None:
+                        continue
+
+                    max_idx = max(
+                        idx
+                        for idx in (ref_idx, desc_idx, qty_idx, unit_idx, price_idx, total_idx)
+                        if idx is not None
+                    )
+                    if len(normalized_row) <= max_idx:
+                        continue
+
+                    code = normalized_row[ref_idx]
+                    description = normalized_row[desc_idx]
+                    if not code or not description:
+                        continue
+                    if code in {"Subtotal Neto:", "Monto Total :"}:
+                        continue
+
+                    try:
+                        quantity = cls._to_float(normalized_row[qty_idx]) if qty_idx is not None else 0.0
+                        unit = normalized_row[unit_idx] if unit_idx is not None else ""
+                        price = cls._to_float(normalized_row[price_idx]) if price_idx is not None else 0.0
+                        line_total = cls._to_float(normalized_row[total_idx]) if total_idx is not None else 0.0
+                    except ValueError:
+                        continue
+
+                    items.append(
+                        InvoiceItem(
+                            codigo=code,
+                            descripcion=description,
+                            cantidad=quantity,
+                            unidad=unit,
+                            precio_unitario=price,
+                            total=line_total,
+                        )
+                    )
+                    continue
 
                 if "Referencia" in cells and "Descripcion" in cells:
                     try:
