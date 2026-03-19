@@ -15,6 +15,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
 from urllib import error, request
+from zoneinfo import ZoneInfo
 
 API_URL_DEFAULT = "https://integracion.ebi-pac.com/api/Enviar"
 AUTH_URL_DEFAULT = "https://integracion.ebi-pac.com/api/Autenticacion"
@@ -189,7 +190,7 @@ class InvoiceParser:
 
 
 def build_payload(parsed: dict[str, Any]) -> dict[str, Any]:
-    fecha_emision = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    fecha_emision = datetime.now(ZoneInfo("America/Panama")).isoformat(timespec="seconds")
     issue_date = parsed.get("issue_date") or datetime.now().strftime("%d-%b-%y").upper()
 
     items = [
@@ -222,7 +223,7 @@ def build_payload(parsed: dict[str, Any]) -> dict[str, Any]:
                 "tipoDocumento": "01",
                 "numeroDocumentoFiscal": parsed.get("invoice_number", ""),
                 "puntoFacturacionFiscal": "001",
-                "fechaEmision": "",
+                "fechaEmision": fecha_emision,
                 "fechaSalida": "",
                 "naturalezaOperacion": "01",
                 "tipoOperacion": "1",
