@@ -8,6 +8,7 @@ import base64
 import hashlib
 import json
 import os
+import webbrowser
 import tkinter as tk
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -500,6 +501,7 @@ class App(tk.Tk):
             with request.urlopen(req, timeout=45) as resp:
                 status = resp.status
                 response_body = resp.read().decode("utf-8", errors="replace")
+                qr_url = self._extract_qr_url(response_body)
                 self._write(
                     self.output_text,
                     f"\n\nResponse:\n{response_body}"
@@ -507,6 +509,9 @@ class App(tk.Tk):
                     ,
                 )
                 messagebox.showinfo("Success", f"Request completed with HTTP {status}")
+                if qr_url:
+                    webbrowser.open(qr_url)
+                    messagebox.showinfo("QR abierto", f"Se abrió el enlace QR en tu navegador:\n{qr_url}")
         except error.HTTPError as exc:
             error_body = exc.read().decode("utf-8", errors="replace")
             self._write(self.output_text, f"HTTPError {exc.code}\n{error_body}")
@@ -524,6 +529,31 @@ class App(tk.Tk):
 
     def _write_json(self, widget: tk.Text, data: Any) -> None:
         self._write(widget, json.dumps(data, indent=2, ensure_ascii=False))
+
+    @staticmethod
+    def _extract_qr_url(response_body: str) -> str | None:
+        try:
+            parsed = json.loads(response_body)
+        except json.JSONDecodeError:
+            return None
+
+        def find_qr_url(node: Any) -> str | None:
+            if isinstance(node, dict):
+                qr_value = node.get("qr")
+                if isinstance(qr_value, str) and qr_value.startswith(("http://", "https://")):
+                    return qr_value
+                for value in node.values():
+                    found = find_qr_url(value)
+                    if found:
+                        return found
+            elif isinstance(node, list):
+                for item in node:
+                    found = find_qr_url(item)
+                    if found:
+                        return found
+            return None
+
+        return find_qr_url(parsed)
 
 
 if __name__ == "__main__":
