@@ -53,9 +53,11 @@ class InvoiceParser:
         issue_date = ""
         customer_name = ""
         payment_terms = ""
+        country = ""
         items: list[InvoiceItem] = []
         subtotal = 0.0
         grand_total = 0.0
+        gastos = 0.0
         item_header_index: dict[str, int] | None = None
 
         with open(file_path, "r", encoding="latin-1", newline="") as f:
@@ -63,6 +65,7 @@ class InvoiceParser:
             for row in reader:
                 normalized_row = [cls._normalize_space(c) for c in row]
                 cells = [c for c in normalized_row if c]
+                # print(f"DEBUG: Processing row: {cells}")  # Debug print to trace row processing
                 if not cells and item_header_index is None:
                     continue
 
@@ -80,6 +83,11 @@ class InvoiceParser:
                     idx = cells.index("Cliente")
                     if idx + 2 < len(cells):
                         customer_name = cells[idx + 2]
+                
+                if not country and "Cliente" in cells:
+                    idx = cells.index("Cliente")
+                    if idx + 4 < len(cells):
+                        country = cells[idx + 4]
 
                 if not payment_terms and "Condiciones de pago" in cells:
                     idx = cells.index("Condiciones de pago")
@@ -96,73 +104,16 @@ class InvoiceParser:
                     if total_idx + 1 < len(cells):
                         grand_total = cls._to_float(cells[total_idx + 1])
 
-                if item_header_index is None and {"Referencia", "Descripcion"}.issubset(set(cells)):
-                    item_header_index = {
-                        value: idx
-                        for idx, value in enumerate(normalized_row)
-                        if value in {"Referencia", "Descripcion", "Cantidad", "Unidad", "Precio Unitario", "Total"}
-                    }
-                    continue
-
-                if item_header_index is not None:
-                    ref_idx = item_header_index.get("Referencia")
-                    desc_idx = item_header_index.get("Descripcion")
-                    qty_idx = item_header_index.get("Cantidad")
-                    unit_idx = item_header_index.get("Unidad")
-                    price_idx = item_header_index.get("Precio Unitario")
-                    total_idx = item_header_index.get("Total")
-
-                    if ref_idx is None or desc_idx is None:
-                        continue
-
-                    max_idx = max(
-                        idx
-                        for idx in (ref_idx, desc_idx, qty_idx, unit_idx, price_idx, total_idx)
-                        if idx is not None
-                    )
-                    if len(normalized_row) <= max_idx:
-                        continue
-
-                    code = normalized_row[ref_idx]
-                    description = normalized_row[desc_idx]
-                    if not code or not description:
-                        continue
-                    if code in {"Subtotal Neto:", "Monto Total :"}:
-                        continue
-
-                    try:
-                        quantity = cls._to_float(normalized_row[qty_idx]) if qty_idx is not None else 0.0
-                        unit = normalized_row[unit_idx] if unit_idx is not None else ""
-                        price = cls._to_float(normalized_row[price_idx]) if price_idx is not None else 0.0
-                        line_total = cls._to_float(normalized_row[total_idx]) if total_idx is not None else 0.0
-                    except ValueError:
-                        continue
+                if "Cubicaje:" not in cells:
+                    code = cells[cells.index("Total")+7] if len(cells) > 0 else ""
+                    description = cells[cells.index("Total")+8] if len(cells) > 0 else ""  
+                    quantity = cls._to_float(cells[cells.index("Total")+9]) if len(cells) > 0 else 0.0
+                    unit = "Docena"
+                    price = cls._to_float(cells[cells.index("Total")+13]) if len(cells) > 0 else 0.0
+                    line_total = cls._to_float(cells[cells.index("Total")+14]) if len(cells) > 0 else 0.0
+                    # print(f"DEBUG: Parsed item - Code: {code}, Description: {description}, Quantity: {quantity}, Unit: {unit}, Price: {price}, Total: {line_total}")  # Debug print to trace item parsing
 
                     items.append(
-                        InvoiceItem(
-                            codigo=code,
-                            descripcion=description,
-                            cantidad=quantity,
-                            unidad=unit,
-                            precio_unitario=price,
-                            total=line_total,
-                        )
-                    )
-                    continue
-
-                if "Referencia" in cells and "Descripcion" in cells:
-                    try:
-                        ref_idx = cells.index("Referencia")
-                        description = cells[ref_idx + 2]
-                        code = cells[ref_idx + 1]
-
-                        # pattern in sample: code, description, cantidad, '/', 0, unidad, precio, total
-                        quantity = cls._to_float(cells[ref_idx + 3])
-                        unit = cells[ref_idx + 6]
-                        price = cls._to_float(cells[ref_idx + 7])
-                        line_total = cls._to_float(cells[ref_idx + 8])
-
-                        items.append(
                             InvoiceItem(
                                 codigo=code,
                                 descripcion=description,
@@ -172,18 +123,23 @@ class InvoiceParser:
                                 total=line_total,
                             )
                         )
-                    except (IndexError, ValueError):
-                        continue
+
+        if "TRASPASO" in cells:
+                    sub_idx = cells.index("TRASPASO")
+                    if sub_idx + 1 < len(cells):
+                        gastos = cls._to_float(cells[sub_idx + 1])
 
         if not grand_total:
-            grand_total = subtotal
+            grand_total = subtotal + gastos
 
         return {
             "invoice_number": invoice_number,
             "issue_date": issue_date,
             "customer_name": customer_name,
+            "country": country,
             "payment_terms": payment_terms,
             "subtotal": subtotal,
+            "gastos": gastos,
             "grand_total": grand_total,
             "items": items,
         }
@@ -203,19 +159,20 @@ def build_payload(parsed: dict[str, Any]) -> dict[str, Any]:
             "codigo": i.codigo,
             "unidadMedida": i.unidad,
             "cantidad": f"{i.cantidad:.2f}",
+            # "fechaFabricacion": "1900-01-01",
+            # "fechaCaducidad": "1900-01-01",
             "precioUnitario": f"{i.precio_unitario:.2f}",
+            "precioUnitarioDescuento": "", 
             "precioItem": f"{i.total:.2f}",
             "valorTotal": f"{i.total:.2f}",
-            "tasaITBMS": "0.00",
-            "valorITBMS": "0.00",
-            "listaItemOTI": [],
-            "vehiculo": {},
-            "medicina": {},
-            "pedidoComercialItem": {},
+            "tasaITBMS": "00",
+            "valorITBMS": "00.00",
+            
         }
         for i in parsed["items"]
-    ]
 
+    ]
+    # print(f"DEBUG: Built items for payload: {items}")  # Debug print to trace item building
     payload = {
         "documento": {
             "codigoSucursalEmisor": "0000",
@@ -224,80 +181,69 @@ def build_payload(parsed: dict[str, Any]) -> dict[str, Any]:
                 "tipoEmision": "01",
                 "fechaInicioContingencia": "",
                 "motivoContingencia": "",
-                "tipoDocumento": "01",
+                "tipoDocumento": "08",
                 "numeroDocumentoFiscal": parsed.get("invoice_number", ""),
                 "puntoFacturacionFiscal": "001",
                 "fechaEmision": fecha_emision,
-                "fechaSalida": "",
+                "fechaSalida": fecha_emision,
                 "naturalezaOperacion": "01",
                 "tipoOperacion": "1",
                 "destinoOperacion": "2",
-                "formatoCAFE": "1",
-                "entregaCAFE": "1",
+                "formatoCAFE": "3",
+                "entregaCAFE": "3",
                 "envioContenedor": "1",
                 "procesoGeneracion": "1",
-                "tipoVenta": "1",
-                "informacionInteres": f"Source date: {issue_date}; Terms: {parsed.get('payment_terms', '')}",
+                "tipoVenta": "",
+                "informacionInteres": "Factura Zona Franca",
                 "cliente": {
-                    "tipoClienteFE": "02",
-                    "tipoContribuyente": "2",
+                    "tipoClienteFE": "04",
+                    "tipoContribuyente": "",
                     "numeroRUC": "",
-                    "digitoVerificadorRUC": "",
-                    "razonSocial": parsed.get("customer_name", "Consumidor Final"),
+                    "razonSocial": parsed.get('customer_name', 'Cliente Extranjero'),
                     "direccion": "",
                     "codigoUbicacion": "",
                     "provincia": "",
                     "distrito": "",
                     "corregimiento": "",
-                    "tipoIdentificacion": "99",
-                    "nroIdentificacionExtranjero": "",
-                    "paisExtranjero": "",
+                    "tipoIdentificacion": "01",
+                    "nroIdentificacionExtranjero": "0000000",
+                    "paisExtranjero": parsed.get("country", "PA"),
                     "telefono1": "",
                     "telefono2": "",
                     "telefono3": "",
                     "correoElectronico1": "",
                     "correoElectronico2": "",
                     "correoElectronico3": "",
-                    "pais": "PA",
+                    "pais": "CR",
                     "paisOtro": "",
                 },
-                "datosFacturaExportacion": {},
-                "listaDocsFiscalReferenciados": [],
-                "listaAutorizadosDescargaFEyEventos": [],
+                "datosFacturaExportacion": {
+                    "condicionesEntrega": "FOB",
+                    "monedaOperExportacion": "USD",
+                    "monedaOperExportacionNonDef": "",
+                    "tipoDeCambio": "",
+                    "montoMonedaExtranjera": "",
+                    "puertoEmbarque": "Zona Libre de Colon"
+                }
             },
             "listaItems": items,
             "totalesSubTotales": {
                 "totalPrecioNeto": f"{parsed['subtotal']:.2f}",
                 "totalITBMS": "0.00",
-                "totalISC": "0.00",
-                "totalMontoGravado": f"{parsed['subtotal']:.2f}",
-                "totalDescuento": "0.00",
-                "totalAcarreoCobrado": "0.00",
-                "valorSeguroCobrado": "0.00",
+                "totalMontoGravado": "0.00",
                 "totalFactura": f"{parsed['grand_total']:.2f}",
                 "totalValorRecibido": f"{parsed['grand_total']:.2f}",
-                "vuelto": "0.00",
                 "tiempoPago": "1",
                 "nroItems": str(len(items)),
                 "totalTodosItems": f"{sum(i.total for i in parsed['items']):.2f}",
-                "listaDescBonificacion": [],
+                "totalOtrosGastos": parsed['gastos'] if 'gastos' in parsed else "0.00",
                 "listaFormaPago": [
                     {
-                        "formaPagoFact": "01",
-                        "descFormaPago": parsed.get("payment_terms", "CONTADO"),
+                        "formaPagoFact": "08",
                         "valorCuotaPagada": f"{parsed['grand_total']:.2f}",
                     }
                 ],
-                "retencion": {},
-                "listaPagoPlazo": [],
-                "listaTotalOTI": [],
             },
-            "pedidoComercialGlobal": {},
-            "infoLogistica": {},
-            "infoEntrega": {},
-            "usoPosterior": {"cufe": ""},
-            "listaExtras": [],
-            "serialDispositivo": "",
         }
     }
     return payload
@@ -397,7 +343,7 @@ class App(tk.Tk):
         ttk.Label(creds, text="Usuario").grid(row=0, column=0, sticky="w")
         ttk.Entry(creds, textvariable=self.username_var, width=30).grid(row=0, column=1, padx=(5, 12), sticky="we")
         ttk.Label(creds, text="Clave").grid(row=0, column=2, sticky="w")
-        ttk.Entry(creds, textvariable=self.password_var, width=30, show="*").grid(row=0, column=3, padx=5, sticky="we")
+        ttk.Entry(creds, textvariable=self.password_var, width=30).grid(row=0, column=3, padx=5, sticky="we")
         ttk.Button(creds, text="Obtener Token", command=self.get_auth_token).grid(row=0, column=4, padx=5, sticky="e")
 
         ttk.Label(top, text="Bearer Token").grid(row=4, column=0, sticky="w")
