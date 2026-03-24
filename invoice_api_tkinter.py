@@ -17,8 +17,13 @@ from typing import Any
 from urllib import error, request
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-API_URL_DEFAULT = "https://integracion.ebi-pac.com/api/Enviar"
-AUTH_URL_DEFAULT = "https://integracion.ebi-pac.com/api/Autenticacion"
+DEMO_ON = True  
+if not DEMO_ON:
+    API_URL_DEFAULT = "https://integracion.ebi-pac.com/api/Enviar"
+    AUTH_URL_DEFAULT = "https://integracion.ebi-pac.com/api/Autenticacion"
+else:
+    API_URL_DEFAULT = "https://integraciondemo.ebi-pac.com/api/Enviar"
+    AUTH_URL_DEFAULT = "https://integraciondemo.ebi-pac.com/api/Autenticacion"
 TOKEN_DEFAULT = "vvslrbtgvsux_ws_ebi"
 CREDENTIALS_FILE = Path.home() / ".facturacion_credentials.json"
 
@@ -128,6 +133,16 @@ class InvoiceParser:
                     sub_idx = cells.index("TRASPASO")
                     if sub_idx + 1 < len(cells):
                         gastos = cls._to_float(cells[sub_idx + 1])
+                        items.append(
+                            InvoiceItem(
+                                codigo="TRASPASO",
+                                descripcion="TRASPASO",
+                                cantidad=1.0,
+                                unidad="und",
+                                precio_unitario=gastos,
+                                total=gastos,
+                            )
+                        )
 
         if not grand_total:
             grand_total = subtotal + gastos
@@ -151,7 +166,7 @@ def build_payload(parsed: dict[str, Any]) -> dict[str, Any]:
     except ZoneInfoNotFoundError:
         panama_tz = timezone(timedelta(hours=-5))
     fecha_emision = datetime.now(panama_tz).isoformat(timespec="seconds")
-    issue_date = parsed.get("issue_date") or datetime.now().strftime("%d-%b-%y").upper()
+    # issue_date = parsed.get("issue_date") or datetime.now().strftime("%d-%b-%y").upper()
 
     items = [
         {
@@ -159,8 +174,6 @@ def build_payload(parsed: dict[str, Any]) -> dict[str, Any]:
             "codigo": i.codigo,
             "unidadMedida": i.unidad,
             "cantidad": f"{i.cantidad:.2f}",
-            # "fechaFabricacion": "1900-01-01",
-            # "fechaCaducidad": "1900-01-01",
             "precioUnitario": f"{i.precio_unitario:.2f}",
             "precioUnitarioDescuento": "", 
             "precioItem": f"{i.total:.2f}",
@@ -228,7 +241,7 @@ def build_payload(parsed: dict[str, Any]) -> dict[str, Any]:
             },
             "listaItems": items,
             "totalesSubTotales": {
-                "totalPrecioNeto": f"{parsed['subtotal']:.2f}",
+                "totalPrecioNeto": f"{parsed['grand_total']:.2f}",
                 "totalITBMS": "0.00",
                 "totalMontoGravado": "0.00",
                 "totalFactura": f"{parsed['grand_total']:.2f}",
@@ -260,10 +273,10 @@ class App(tk.Tk):
 
         self.url_var = tk.StringVar(value=API_URL_DEFAULT)
         self.auth_url_var = tk.StringVar(value=AUTH_URL_DEFAULT)
-        self.auth_bearer_var = tk.StringVar(value=TOKEN_DEFAULT)
+        # self.auth_bearer_var = tk.StringVar(value=TOKEN_DEFAULT)
         self.username_var = tk.StringVar(value="")
         self.password_var = tk.StringVar(value="")
-        self.token_var = tk.StringVar(value=TOKEN_DEFAULT)
+        self.auth_bearer_var = tk.StringVar(value=TOKEN_DEFAULT)
         self.file_var = tk.StringVar(value="")
 
         self._build_ui()
@@ -332,8 +345,8 @@ class App(tk.Tk):
         ttk.Label(top, text="Auth URL").grid(row=1, column=0, sticky="w")
         ttk.Entry(top, textvariable=self.auth_url_var, width=80).grid(row=1, column=1, padx=5, sticky="we")
 
-        ttk.Label(top, text="Auth Bearer").grid(row=2, column=0, sticky="w")
-        ttk.Entry(top, textvariable=self.auth_bearer_var, width=80, show="*").grid(row=2, column=1, padx=5, sticky="we")
+        # ttk.Label(top, text="Auth Bearer").grid(row=2, column=0, sticky="w")
+        # ttk.Entry(top, textvariable=self.auth_bearer_var, width=80, show="*").grid(row=2, column=1, padx=5, sticky="we")
 
         creds = ttk.Frame(top)
         creds.grid(row=3, column=1, sticky="we", pady=5)
@@ -347,7 +360,7 @@ class App(tk.Tk):
         ttk.Button(creds, text="Obtener Token", command=self.get_auth_token).grid(row=0, column=4, padx=5, sticky="e")
 
         ttk.Label(top, text="Bearer Token").grid(row=4, column=0, sticky="w")
-        ttk.Entry(top, textvariable=self.token_var, width=80, show="*").grid(row=4, column=1, padx=5, sticky="we")
+        ttk.Entry(top, textvariable=self.auth_bearer_var, width=80, show="*").grid(row=4, column=1, padx=5, sticky="we")
 
         ttk.Button(top, text="Load TSV", command=self.load_file).grid(row=5, column=0, pady=8, sticky="w")
         ttk.Entry(top, textvariable=self.file_var, width=80).grid(row=5, column=1, padx=5, sticky="we")
@@ -440,7 +453,7 @@ class App(tk.Tk):
                 if not token:
                     raise ValueError("La respuesta no contiene un token válido.")
 
-                self.token_var.set(token)
+                self.auth_bearer_var.set(token)
                 expiracion = data.get("expiracion", "N/D")
                 self._write(
                     self.output_text,
@@ -466,7 +479,7 @@ class App(tk.Tk):
             messagebox.showwarning("No payload", "Build payload first.")
             return
 
-        token = self.token_var.get().strip()
+        token = self.auth_bearer_var.get().strip()
         if not token:
             messagebox.showwarning("Token missing", "Please provide a Bearer token.")
             return
@@ -489,8 +502,9 @@ class App(tk.Tk):
                 response_body = resp.read().decode("utf-8", errors="replace")
                 self._write(
                     self.output_text,
+                    f"\n\nResponse:\n{response_body}"
                     f"HTTP {status}\n\nRequest payload:\n{json.dumps(self.payload, indent=2, ensure_ascii=False)}"
-                    f"\n\nResponse:\n{response_body}",
+                    ,
                 )
                 messagebox.showinfo("Success", f"Request completed with HTTP {status}")
         except error.HTTPError as exc:
