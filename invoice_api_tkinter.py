@@ -27,6 +27,7 @@ else:
     AUTH_URL_DEFAULT = "https://integraciondemo.ebi-pac.com/api/Autenticacion"
 TOKEN_DEFAULT = "vvslrbtgvsux_ws_ebi"
 CREDENTIALS_FILE = Path.home() / ".facturacion_credentials.json"
+ACTIVITY_LOG_FILE = Path.home() / ".facturacion_activity_log.json"
 
 
 @dataclass
@@ -271,6 +272,9 @@ class App(tk.Tk):
 
         self.parsed_data: dict[str, Any] | None = None
         self.payload: dict[str, Any] | None = None
+        self.activity_log: dict[str, list[dict[str, Any]]] = {}
+        self.log_tree: ttk.Treeview | None = None
+        self.log_detail_text: tk.Text | None = None
 
         self.url_var = tk.StringVar(value=API_URL_DEFAULT)
         self.auth_url_var = tk.StringVar(value=AUTH_URL_DEFAULT)
@@ -282,6 +286,7 @@ class App(tk.Tk):
 
         self._build_ui()
         self._load_saved_credentials()
+        self._load_activity_log()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     @staticmethod
@@ -337,6 +342,12 @@ class App(tk.Tk):
         self.destroy()
 
     def _build_ui(self) -> None:
+        menubar = tk.Menu(self)
+        activity_menu = tk.Menu(menubar, tearoff=0)
+        activity_menu.add_command(label="View Activity Log", command=self.open_activity_log_window)
+        menubar.add_cascade(label="Activity", menu=activity_menu)
+        self.config(menu=menubar)
+
         top = ttk.Frame(self, padding=10)
         top.pack(fill="x")
 
@@ -502,6 +513,18 @@ class App(tk.Tk):
                 status = resp.status
                 response_body = resp.read().decode("utf-8", errors="replace")
                 qr_url = self._extract_qr_url(response_body)
+                invoice_number = (
+                    self.payload.get("documento", {})
+                    .get("datosTransaccion", {})
+                    .get("numeroDocumentoFiscal", "")
+                )
+                self._append_activity_entry(
+                    invoice_number=invoice_number,
+                    status=f"HTTP {status}",
+                    endpoint=self.url_var.get().strip(),
+                    request_payload=self.payload,
+                    response_body=response_body,
+                )
                 self._write(
                     self.output_text,
                     f"\n\nResponse:\n{response_body}"
@@ -514,11 +537,147 @@ class App(tk.Tk):
                     messagebox.showinfo("QR abierto", f"Se abrió el enlace QR en tu navegador:\n{qr_url}")
         except error.HTTPError as exc:
             error_body = exc.read().decode("utf-8", errors="replace")
+            invoice_number = ""
+            if self.payload:
+                invoice_number = (
+                    self.payload.get("documento", {})
+                    .get("datosTransaccion", {})
+                    .get("numeroDocumentoFiscal", "")
+                )
+            self._append_activity_entry(
+                invoice_number=invoice_number,
+                status=f"HTTPError {exc.code}",
+                endpoint=self.url_var.get().strip(),
+                request_payload=self.payload,
+                response_body=error_body,
+            )
             self._write(self.output_text, f"HTTPError {exc.code}\n{error_body}")
             messagebox.showerror("HTTP Error", f"{exc.code}: {exc.reason}")
         except Exception as exc:  # noqa: BLE001
+            invoice_number = ""
+            if self.payload:
+                invoice_number = (
+                    self.payload.get("documento", {})
+                    .get("datosTransaccion", {})
+                    .get("numeroDocumentoFiscal", "")
+                )
+            self._append_activity_entry(
+                invoice_number=invoice_number,
+                status="Request Error",
+                endpoint=self.url_var.get().strip(),
+                request_payload=self.payload,
+                response_body=str(exc),
+            )
             self._write(self.output_text, f"Error: {exc}")
             messagebox.showerror("Request Error", str(exc))
+
+    def _append_activity_entry(
+        self,
+        invoice_number: str,
+        status: str,
+        endpoint: str,
+        request_payload: dict[str, Any] | None,
+        response_body: str,
+    ) -> None:
+        key = invoice_number.strip() or "UNKNOWN"
+        entry = {
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "status": status,
+            "endpoint": endpoint,
+            "request_payload": request_payload or {},
+            "response_body": response_body,
+        }
+        self.activity_log.setdefault(key, []).append(entry)
+        self._save_activity_log()
+        self._refresh_activity_tree()
+
+    def _load_activity_log(self) -> None:
+        if not ACTIVITY_LOG_FILE.exists():
+            self.activity_log = {}
+            return
+        try:
+            loaded = json.loads(ACTIVITY_LOG_FILE.read_text(encoding="utf-8"))
+            self.activity_log = loaded if isinstance(loaded, dict) else {}
+        except Exception:  # noqa: BLE001
+            self.activity_log = {}
+
+    def _save_activity_log(self) -> None:
+        ACTIVITY_LOG_FILE.write_text(
+            json.dumps(self.activity_log, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def open_activity_log_window(self) -> None:
+        win = tk.Toplevel(self)
+        win.title("Activity Log")
+        win.geometry("1000x600")
+
+        paned = ttk.Panedwindow(win, orient="horizontal")
+        paned.pack(fill="both", expand=True, padx=10, pady=10)
+
+        left = ttk.Labelframe(paned, text="Requests by Invoice Number")
+        right = ttk.Labelframe(paned, text="Selected Response Detail")
+        paned.add(left, weight=1)
+        paned.add(right, weight=2)
+
+        columns = ("invoice", "timestamp", "status")
+        self.log_tree = ttk.Treeview(left, columns=columns, show="headings")
+        self.log_tree.heading("invoice", text="Invoice")
+        self.log_tree.heading("timestamp", text="Timestamp")
+        self.log_tree.heading("status", text="Status")
+        self.log_tree.column("invoice", width=180, anchor="w")
+        self.log_tree.column("timestamp", width=180, anchor="w")
+        self.log_tree.column("status", width=140, anchor="w")
+        self.log_tree.pack(fill="both", expand=True)
+        self.log_tree.bind("<<TreeviewSelect>>", self._on_log_select)
+
+        self.log_detail_text = tk.Text(right, wrap="word")
+        self.log_detail_text.pack(fill="both", expand=True)
+
+        self._refresh_activity_tree()
+
+    def _refresh_activity_tree(self) -> None:
+        if self.log_tree is None:
+            return
+        for row_id in self.log_tree.get_children():
+            self.log_tree.delete(row_id)
+
+        for invoice_number, entries in sorted(self.activity_log.items()):
+            for index, entry in enumerate(entries):
+                self.log_tree.insert(
+                    "",
+                    "end",
+                    iid=f"{invoice_number}|{index}",
+                    values=(invoice_number, entry.get("timestamp", ""), entry.get("status", "")),
+                )
+
+    def _on_log_select(self, _: tk.Event) -> None:
+        if not self.log_tree or not self.log_detail_text:
+            return
+        selected = self.log_tree.selection()
+        if not selected:
+            return
+        row_id = selected[0]
+        if "|" not in row_id:
+            return
+        invoice_number, index_raw = row_id.split("|", maxsplit=1)
+        try:
+            index = int(index_raw)
+            entry = self.activity_log[invoice_number][index]
+        except (ValueError, KeyError, IndexError):
+            return
+
+        self._write(
+            self.log_detail_text,
+            json.dumps(
+                {
+                    "invoice_number": invoice_number,
+                    **entry,
+                },
+                indent=2,
+                ensure_ascii=False,
+            ),
+        )
 
     @staticmethod
     def _write(widget: tk.Text, content: str) -> None:
