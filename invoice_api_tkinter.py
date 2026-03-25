@@ -283,6 +283,7 @@ class App(tk.Tk):
         self.password_var = tk.StringVar(value="")
         self.auth_bearer_var = tk.StringVar(value=TOKEN_DEFAULT)
         self.file_var = tk.StringVar(value="")
+        self.auto_open_qr_var = tk.BooleanVar(value=True)
 
         self._build_ui()
         self._load_saved_credentials()
@@ -381,6 +382,11 @@ class App(tk.Tk):
         btns.grid(row=6, column=1, sticky="w", pady=8)
         ttk.Button(btns, text="Build Payload", command=self.make_payload).pack(side="left", padx=4)
         ttk.Button(btns, text="Send Request", command=self.send_request).pack(side="left", padx=4)
+        ttk.Checkbutton(
+            btns,
+            text="Auto-open QR link",
+            variable=self.auto_open_qr_var,
+        ).pack(side="left", padx=8)
 
         top.columnconfigure(1, weight=1)
 
@@ -533,8 +539,11 @@ class App(tk.Tk):
                 )
                 messagebox.showinfo("Success", f"Request completed with HTTP {status}")
                 if qr_url:
-                    webbrowser.open(qr_url)
-                    messagebox.showinfo("QR abierto", f"Se abrió el enlace QR en tu navegador:\n{qr_url}")
+                    if self.auto_open_qr_var.get():
+                        webbrowser.open(qr_url)
+                        messagebox.showinfo("QR abierto", f"Se abrió el enlace QR en tu navegador:\n{qr_url}")
+                    else:
+                        messagebox.showinfo("QR disponible", f"Enlace QR recibido:\n{qr_url}")
         except error.HTTPError as exc:
             error_body = exc.read().decode("utf-8", errors="replace")
             invoice_number = ""
