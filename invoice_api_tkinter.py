@@ -145,6 +145,21 @@ class InvoiceParser:
                                 total=gastos,
                             )
                         )
+        
+        if "SALIDA" in cells:
+                    sub_idx = cells.index("SALIDA")
+                    if sub_idx + 1 < len(cells):
+                        gastos = cls._to_float(cells[sub_idx + 1])
+                        items.append(
+                            InvoiceItem(
+                                codigo="SALIDA",
+                                descripcion="SALIDA",
+                                cantidad=1.0,
+                                unidad="und",
+                                precio_unitario=gastos,
+                                total=gastos,
+                            )
+                        )
 
         if not grand_total:
             grand_total = subtotal + gastos
