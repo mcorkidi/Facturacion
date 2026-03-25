@@ -586,6 +586,7 @@ class App(tk.Tk):
             "endpoint": endpoint,
             "request_payload": request_payload or {},
             "response_body": response_body,
+            "qr_url": self._extract_qr_url(response_body) or "",
         }
         self.activity_log.setdefault(key, []).append(entry)
         self._save_activity_log()
@@ -620,16 +621,19 @@ class App(tk.Tk):
         paned.add(left, weight=1)
         paned.add(right, weight=2)
 
-        columns = ("invoice", "timestamp", "status")
+        columns = ("invoice", "timestamp", "status", "qr")
         self.log_tree = ttk.Treeview(left, columns=columns, show="headings")
         self.log_tree.heading("invoice", text="Invoice")
         self.log_tree.heading("timestamp", text="Timestamp")
         self.log_tree.heading("status", text="Status")
+        self.log_tree.heading("qr", text="QR Link")
         self.log_tree.column("invoice", width=180, anchor="w")
         self.log_tree.column("timestamp", width=180, anchor="w")
         self.log_tree.column("status", width=140, anchor="w")
+        self.log_tree.column("qr", width=360, anchor="w")
         self.log_tree.pack(fill="both", expand=True)
         self.log_tree.bind("<<TreeviewSelect>>", self._on_log_select)
+        self.log_tree.bind("<Double-1>", self._on_log_double_click)
 
         self.log_detail_text = tk.Text(right, wrap="word")
         self.log_detail_text.pack(fill="both", expand=True)
@@ -648,7 +652,12 @@ class App(tk.Tk):
                     "",
                     "end",
                     iid=f"{invoice_number}|{index}",
-                    values=(invoice_number, entry.get("timestamp", ""), entry.get("status", "")),
+                    values=(
+                        invoice_number,
+                        entry.get("timestamp", ""),
+                        entry.get("status", ""),
+                        entry.get("qr_url", ""),
+                    ),
                 )
 
     def _on_log_select(self, _: tk.Event) -> None:
@@ -678,6 +687,25 @@ class App(tk.Tk):
                 ensure_ascii=False,
             ),
         )
+
+    def _on_log_double_click(self, event: tk.Event) -> None:
+        if not self.log_tree:
+            return
+        row_id = self.log_tree.identify_row(event.y)
+        column_id = self.log_tree.identify_column(event.x)
+        if not row_id or column_id != "#4" or "|" not in row_id:
+            return
+
+        invoice_number, index_raw = row_id.split("|", maxsplit=1)
+        try:
+            index = int(index_raw)
+            entry = self.activity_log[invoice_number][index]
+        except (ValueError, KeyError, IndexError):
+            return
+
+        qr_url = entry.get("qr_url", "")
+        if isinstance(qr_url, str) and qr_url.startswith(("http://", "https://")):
+            webbrowser.open(qr_url)
 
     @staticmethod
     def _write(widget: tk.Text, content: str) -> None:
