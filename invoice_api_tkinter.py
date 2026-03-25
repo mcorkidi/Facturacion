@@ -609,6 +609,10 @@ class App(tk.Tk):
         )
 
     def open_activity_log_window(self) -> None:
+        if self.log_tree is not None and self.log_tree.winfo_exists():
+            self.log_tree.winfo_toplevel().lift()
+            return
+
         win = tk.Toplevel(self)
         win.title("Activity Log")
         win.geometry("1000x600")
@@ -638,13 +642,28 @@ class App(tk.Tk):
         self.log_detail_text = tk.Text(right, wrap="word")
         self.log_detail_text.pack(fill="both", expand=True)
 
+        def _on_close() -> None:
+            self.log_tree = None
+            self.log_detail_text = None
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", _on_close)
         self._refresh_activity_tree()
 
     def _refresh_activity_tree(self) -> None:
         if self.log_tree is None:
             return
-        for row_id in self.log_tree.get_children():
-            self.log_tree.delete(row_id)
+        try:
+            if not self.log_tree.winfo_exists():
+                self.log_tree = None
+                self.log_detail_text = None
+                return
+            for row_id in self.log_tree.get_children():
+                self.log_tree.delete(row_id)
+        except tk.TclError:
+            self.log_tree = None
+            self.log_detail_text = None
+            return
 
         for invoice_number, entries in sorted(self.activity_log.items()):
             for index, entry in enumerate(entries):
