@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """Tkinter UI to parse a tab-delimited invoice export and send it to EBI API."""
 
-from __future__ import annotations
 
+from __future__ import annotations
+try:
+    import pyi_splash
+    pyi_splash.close()
+except ImportError:
+    pass
 import csv
 import base64
 import hashlib
@@ -17,8 +22,9 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Any
 from urllib import error, request
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+import pycountry
 
-DEMO_ON = True  
+DEMO_ON = False
 if not DEMO_ON:
     API_URL_DEFAULT = "https://integracion.ebi-pac.com/api/Enviar"
     AUTH_URL_DEFAULT = "https://integracion.ebi-pac.com/api/Autenticacion"
@@ -48,7 +54,7 @@ class InvoiceParser:
         clean = raw.replace(",", "").replace("$", "").strip()
         if not clean:
             return 0.0
-        return float(clean)
+        return round(float(clean), 2)
 
     @staticmethod
     def _normalize_space(value: str) -> str:
@@ -64,6 +70,7 @@ class InvoiceParser:
         items: list[InvoiceItem] = []
         subtotal = 0.0
         grand_total = 0.0
+        gastos_total = 0.0
         gastos = 0.0
         item_header_index: dict[str, int] | None = None
 
@@ -119,7 +126,8 @@ class InvoiceParser:
                     price = cls._to_float(cells[cells.index("Total")+13]) if len(cells) > 0 else 0.0
                     line_total = cls._to_float(cells[cells.index("Total")+14]) if len(cells) > 0 else 0.0
                     # print(f"DEBUG: Parsed item - Code: {code}, Description: {description}, Quantity: {quantity}, Unit: {unit}, Price: {price}, Total: {line_total}")  # Debug print to trace item parsing
-
+                    if cells[cells.index("Total")+11] != "0":
+                        quantity += (float(cells[cells.index("Total")+11])/12)
                     items.append(
                             InvoiceItem(
                                 codigo=code,
@@ -131,38 +139,27 @@ class InvoiceParser:
                             )
                         )
 
-        if "TRASPASO" in cells:
-                    sub_idx = cells.index("TRASPASO")
-                    if sub_idx + 1 < len(cells):
-                        gastos = cls._to_float(cells[sub_idx + 1])
-                        items.append(
-                            InvoiceItem(
-                                codigo="TRASPASO",
-                                descripcion="TRASPASO",
-                                cantidad=1.0,
-                                unidad="und",
-                                precio_unitario=gastos,
-                                total=gastos,
-                            )
-                        )
+                if "Total de bultos:" in cells:
+                            # print(f"DEBUG: Found 'Total de bultos:' in row, processing gastos - Cells: {cells}")  # print to trace gastos processing
+                            sub_idx = cells.index("Total de bultos:")
+                            if sub_idx + 3 < len(cells):
+                                gastos = cls._to_float(cells[sub_idx - 2])
+                                gastos_total += gastos
+                                items.append(
+                                    InvoiceItem(
+                                        codigo=cells[sub_idx - 3],
+                                        descripcion=cells[sub_idx - 3],
+                                        cantidad=1.0,
+                                        unidad="und",
+                                        precio_unitario=gastos,
+                                        total=gastos,
+                                    )
+                                )
         
-        if "SALIDA" in cells:
-                    sub_idx = cells.index("SALIDA")
-                    if sub_idx + 1 < len(cells):
-                        gastos = cls._to_float(cells[sub_idx + 1])
-                        items.append(
-                            InvoiceItem(
-                                codigo="SALIDA",
-                                descripcion="SALIDA",
-                                cantidad=1.0,
-                                unidad="und",
-                                precio_unitario=gastos,
-                                total=gastos,
-                            )
-                        )
+       
 
         if not grand_total:
-            grand_total = subtotal + gastos
+            grand_total = subtotal + gastos_total
 
         return {
             "invoice_number": invoice_number,
@@ -171,7 +168,7 @@ class InvoiceParser:
             "country": country,
             "payment_terms": payment_terms,
             "subtotal": subtotal,
-            "gastos": gastos,
+            "gastos": gastos_total,
             "grand_total": grand_total,
             "items": items,
         }
@@ -190,7 +187,7 @@ def build_payload(parsed: dict[str, Any]) -> dict[str, Any]:
             "descripcion": i.descripcion,
             "codigo": i.codigo,
             "unidadMedida": i.unidad,
-            "cantidad": f"{i.cantidad:.2f}",
+            "cantidad": f"{i.cantidad:.3f}",
             "precioUnitario": f"{i.precio_unitario:.2f}",
             "precioUnitarioDescuento": "", 
             "precioItem": f"{i.total:.2f}",
@@ -203,6 +200,13 @@ def build_payload(parsed: dict[str, Any]) -> dict[str, Any]:
 
     ]
     # print(f"DEBUG: Built items for payload: {items}")  # Debug print to trace item building
+    try:
+        country_code = pycountry.countries.search_fuzzy(parsed.get("country", "PA"))[0].alpha_2
+    except (LookupError, IndexError):
+        if parsed.get("country") == "DOMINICANA" or parsed.get("country") == "dominicana":
+            country_code = "DO"
+        else:
+            country_code = "CR"
     payload = {
         "documento": {
             "codigoSucursalEmisor": "0000",
@@ -218,7 +222,7 @@ def build_payload(parsed: dict[str, Any]) -> dict[str, Any]:
                 "fechaSalida": fecha_emision,
                 "naturalezaOperacion": "01",
                 "tipoOperacion": "1",
-                "destinoOperacion": "2",
+                "destinoOperacion": "1" if country_code == "PA" else "2",
                 "formatoCAFE": "3",
                 "entregaCAFE": "3",
                 "envioContenedor": "1",
@@ -244,17 +248,19 @@ def build_payload(parsed: dict[str, Any]) -> dict[str, Any]:
                     "correoElectronico1": "",
                     "correoElectronico2": "",
                     "correoElectronico3": "",
-                    "pais": "CR",
+                    "pais": country_code,
                     "paisOtro": "",
                 },
-                "datosFacturaExportacion": {
-                    "condicionesEntrega": "FOB",
-                    "monedaOperExportacion": "USD",
-                    "monedaOperExportacionNonDef": "",
-                    "tipoDeCambio": "",
-                    "montoMonedaExtranjera": "",
-                    "puertoEmbarque": "Zona Libre de Colon"
-                }
+                **({
+                        "datosFacturaExportacion": {
+                            "condicionesEntrega": "FOB",
+                            "monedaOperExportacion": "USD",
+                            "monedaOperExportacionNonDef": "",
+                            "tipoDeCambio": "",
+                            "montoMonedaExtranjera": "",
+                            "puertoEmbarque": "Zona Libre de Colon"
+                        }
+                    } if not country_code == "PA" else {})
             },
             "listaItems": items,
             "totalesSubTotales": {
@@ -284,7 +290,7 @@ class App(tk.Tk):
         super().__init__()
         self.title("Factura -> EBI API Sender")
         self.geometry("1000x700")
-
+        self.iconbitmap("icon.ico")
         self.parsed_data: dict[str, Any] | None = None
         self.payload: dict[str, Any] | None = None
         self.activity_log: dict[str, list[dict[str, Any]]] = {}
@@ -384,7 +390,7 @@ class App(tk.Tk):
         ttk.Label(creds, text="Usuario").grid(row=0, column=0, sticky="w")
         ttk.Entry(creds, textvariable=self.username_var, width=30).grid(row=0, column=1, padx=(5, 12), sticky="we")
         ttk.Label(creds, text="Clave").grid(row=0, column=2, sticky="w")
-        ttk.Entry(creds, textvariable=self.password_var, width=30).grid(row=0, column=3, padx=5, sticky="we")
+        ttk.Entry(creds, textvariable=self.password_var, width=30, show="*").grid(row=0, column=3, padx=5, sticky="we")
         ttk.Button(creds, text="Obtener Token", command=self.get_auth_token).grid(row=0, column=4, padx=5, sticky="e")
 
         ttk.Label(top, text="Bearer Token").grid(row=4, column=0, sticky="w")
@@ -413,11 +419,24 @@ class App(tk.Tk):
         paned.add(left_frame, weight=1)
         paned.add(right_frame, weight=1)
 
-        self.parsed_text = tk.Text(left_frame, wrap="word")
-        self.parsed_text.pack(fill="both", expand=True)
+        # Left text + scrollbar
+        left_scroll = tk.Scrollbar(left_frame)
+        left_scroll.pack(side="right", fill="y")
 
-        self.output_text = tk.Text(right_frame, wrap="word")
-        self.output_text.pack(fill="both", expand=True)
+        self.parsed_text = tk.Text(left_frame, wrap="word", yscrollcommand=left_scroll.set)
+        self.parsed_text.pack(side="left", fill="both", expand=True)
+
+        left_scroll.config(command=self.parsed_text.yview)
+
+
+        # Right text + scrollbar
+        right_scroll = tk.Scrollbar(right_frame)
+        right_scroll.pack(side="right", fill="y")
+
+        self.output_text = tk.Text(right_frame, wrap="word", yscrollcommand=right_scroll.set)
+        self.output_text.pack(side="left", fill="both", expand=True)
+
+        right_scroll.config(command=self.output_text.yview)
 
     def load_file(self) -> None:
         path = filedialog.askopenfilename(
