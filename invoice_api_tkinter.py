@@ -3,11 +3,11 @@
 
 
 from __future__ import annotations
-try:
-    import pyi_splash
-    pyi_splash.close()
-except ImportError:
-    pass
+# try:
+#     import pyi_splash
+#     pyi_splash.close()
+# except ImportError:
+#     pass
 import csv
 import base64
 import hashlib
@@ -23,8 +23,9 @@ from typing import Any
 from urllib import error, request
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import pycountry
+import pytz
 
-DEMO_ON = False
+DEMO_ON = True
 if not DEMO_ON:
     API_URL_DEFAULT = "https://integracion.ebi-pac.com/api/Enviar"
     AUTH_URL_DEFAULT = "https://integracion.ebi-pac.com/api/Autenticacion"
@@ -175,12 +176,30 @@ class InvoiceParser:
 
 
 def build_payload(parsed: dict[str, Any]) -> dict[str, Any]:
-    try:
-        panama_tz = ZoneInfo("America/Panama")
-    except ZoneInfoNotFoundError:
-        panama_tz = timezone(timedelta(hours=-5))
-    fecha_emision = datetime.now(panama_tz).isoformat(timespec="seconds")
+    # try:
+    #     panama_tz = ZoneInfo("America/Panama")
+    # except ZoneInfoNotFoundError:
+    #     panama_tz = timezone(timedelta(hours=-5))
+    # fecha_emision = datetime.now(panama_tz).isoformat(timespec="seconds")
     # issue_date = parsed.get("issue_date") or datetime.now().strftime("%d-%b-%y").upper()
+    # Input date
+    date_str = parsed["issue_date"]
+
+    # Step 1: Parse date (day-month-year with abbreviated month)
+    dt = datetime.strptime(date_str, "%d-%b-%y")
+
+    # Get current time
+    now = datetime.now()
+
+    # Replace with current time
+    dt = dt.replace(hour=now.hour, minute=now.minute, second=now.second)
+
+    # Step 3: Add timezone (example: -05:00)
+    timezone = pytz.timezone("Etc/GMT+5")  # GMT+5 corresponds to -05:00 offset
+    dt = timezone.localize(dt)
+
+    # Step 4: Convert to ISO 8601 string
+    fecha_emision = dt.isoformat()
 
     items = [
         {
