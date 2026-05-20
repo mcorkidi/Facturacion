@@ -52,6 +52,7 @@ class InvoiceParser:
 
     @staticmethod
     def _to_float(raw: str) -> float:
+        print(raw)
         clean = raw.replace(",", "").replace("$", "").strip()
         if not clean:
             return 0.0
