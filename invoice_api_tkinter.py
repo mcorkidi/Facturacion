@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tkinter UI to parse a tab-delimited invoice export and send it to EBI API."""
+"""Tkinter UI to parse invoice exports and send them to EBI API."""
 
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import pycountry
 import pytz
 
-DEMO_ON = True
+DEMO_ON = False
 if not DEMO_ON:
     API_URL_DEFAULT = "https://integracion.ebi-pac.com/api/Enviar"
     AUTH_URL_DEFAULT = "https://integracion.ebi-pac.com/api/Autenticacion"
@@ -48,11 +48,10 @@ class InvoiceItem:
 
 
 class InvoiceParser:
-    """Parses the custom tab-delimited sample format into items and summary values."""
+    """Parses invoice exports into items and summary values."""
 
     @staticmethod
     def _to_float(raw: str) -> float:
-        print(raw)
         clean = raw.replace(",", "").replace("$", "").strip()
         if not clean:
             return 0.0
@@ -61,6 +60,85 @@ class InvoiceParser:
     @staticmethod
     def _normalize_space(value: str) -> str:
         return " ".join(value.split())
+
+    @classmethod
+    def parse_file(cls, file_path: str | Path) -> list[dict[str, Any]]:
+        path = Path(file_path)
+        with open(path, "r", encoding="latin-1", newline="") as f:
+            sample = f.read(4096)
+            f.seek(0)
+            try:
+                dialect = csv.Sniffer().sniff(sample, delimiters=";\t,")
+            except csv.Error:
+                dialect = csv.excel_tab
+
+        if dialect.delimiter == ";":
+            return cls.parse_csv_file(path)
+        return [cls.parse_tab_file(path)]
+
+    @classmethod
+    def parse_csv_file(cls, file_path: str | Path) -> list[dict[str, Any]]:
+        invoices: dict[str, dict[str, Any]] = {}
+
+        with open(file_path, "r", encoding="latin-1", newline="") as f:
+            reader = csv.DictReader(f, delimiter=";")
+            for row in reader:
+                invoice_number = cls._normalize_space(row.get("Numero de factura", ""))
+                if not invoice_number:
+                    continue
+
+                invoice = invoices.setdefault(
+                    invoice_number,
+                    {
+                        "invoice_number": invoice_number,
+                        "issue_date": cls._normalize_space(row.get("Fecha", "")),
+                        "customer_name": cls._normalize_space(row.get("Nombre del cliente", "")),
+                        "country": cls._normalize_space(row.get("Pais", "")),
+                        "payment_terms": "",
+                        "subtotal": cls._to_float(row.get("Subtotal", "")),
+                        "gastos": 0.0,
+                        "grand_total": cls._to_float(row.get("Total", "")),
+                        "items": [],
+                        "_expenses_added": False,
+                    },
+                )
+
+                invoice["items"].append(
+                    InvoiceItem(
+                        codigo=cls._normalize_space(row.get("Referencia", "")),
+                        descripcion=cls._normalize_space(row.get("Descripcion", "")),
+                        cantidad=cls._to_float(row.get("Cantidad", "")),
+                        unidad=cls._normalize_space(row.get("Unidad", "")) or "und",
+                        precio_unitario=cls._to_float(row.get("Precio", "")),
+                        total=cls._to_float(row.get("Total de linea", "")),
+                    )
+                )
+
+                if not invoice["_expenses_added"]:
+                    for idx in range(1, 4):
+                        expense_name = cls._normalize_space(row.get(f"Gasto {idx}", ""))
+                        expense_amount = cls._to_float(row.get(f"Monto Gasto {idx}", ""))
+                        if expense_name and expense_amount:
+                            invoice["gastos"] += expense_amount
+                            invoice["items"].append(
+                                InvoiceItem(
+                                    codigo=expense_name,
+                                    descripcion=expense_name,
+                                    cantidad=1.0,
+                                    unidad="und",
+                                    precio_unitario=expense_amount,
+                                    total=expense_amount,
+                                )
+                            )
+                    invoice["_expenses_added"] = True
+
+        parsed_invoices = list(invoices.values())
+        for invoice in parsed_invoices:
+            invoice.pop("_expenses_added", None)
+            if not invoice["grand_total"]:
+                invoice["grand_total"] = invoice["subtotal"] + invoice["gastos"]
+
+        return parsed_invoices
 
     @classmethod
     def parse_tab_file(cls, file_path: str | Path) -> dict[str, Any]:
@@ -201,12 +279,12 @@ def build_payload(parsed: dict[str, Any]) -> dict[str, Any]:
 
     # Step 4: Convert to ISO 8601 string
     fecha_emision = dt.isoformat()
-
+    
     items = [
         {
             "descripcion": i.descripcion,
             "codigo": i.codigo,
-            "unidadMedida": i.unidad,
+            "unidadMedida": "Docena" if i.unidad == "DOC" else i.unidad,
             "cantidad": f"{i.cantidad:.3f}",
             "precioUnitario": f"{i.precio_unitario:.2f}",
             "precioUnitarioDescuento": "", 
@@ -312,7 +390,9 @@ class App(tk.Tk):
         self.geometry("1000x700")
         self.iconbitmap("icon.ico")
         self.parsed_data: dict[str, Any] | None = None
+        self.parsed_invoices: list[dict[str, Any]] = []
         self.payload: dict[str, Any] | None = None
+        self.payloads: list[dict[str, Any]] = []
         self.activity_log: dict[str, list[dict[str, Any]]] = {}
         self.log_tree: ttk.Treeview | None = None
         self.log_detail_text: tk.Text | None = None
@@ -416,7 +496,7 @@ class App(tk.Tk):
         ttk.Label(top, text="Bearer Token").grid(row=4, column=0, sticky="w")
         ttk.Entry(top, textvariable=self.auth_bearer_var, width=80, show="*").grid(row=4, column=1, padx=5, sticky="we")
 
-        ttk.Button(top, text="Load TSV", command=self.load_file).grid(row=5, column=0, pady=8, sticky="w")
+        ttk.Button(top, text="Load Invoice File", command=self.load_file).grid(row=5, column=0, pady=8, sticky="w")
         ttk.Entry(top, textvariable=self.file_var, width=80).grid(row=5, column=1, padx=5, sticky="we")
 
         btns = ttk.Frame(top)
@@ -460,18 +540,24 @@ class App(tk.Tk):
 
     def load_file(self) -> None:
         path = filedialog.askopenfilename(
-            title="Select tab-delimited invoice file",
-            filetypes=[("Tab delimited", "*.txt *.tsv *.csv"), ("All files", "*.*")],
+            title="Select invoice file",
+            filetypes=[("Invoice files", "*.csv *.txt *.tsv"), ("All files", "*.*")],
         )
         if not path:
             return
 
         self.file_var.set(path)
         try:
-            self.parsed_data = InvoiceParser.parse_tab_file(path)
+            self.parsed_invoices = InvoiceParser.parse_file(path)
+            self.parsed_data = self.parsed_invoices[0] if self.parsed_invoices else None
             self.payload = None
-            self._write_json(self.parsed_text, self._parsed_to_dict(self.parsed_data))
-            self._write(self.output_text, "File loaded. Click 'Build Payload' to generate JSON.")
+            self.payloads = []
+            parsed_output = [self._parsed_to_dict(invoice) for invoice in self.parsed_invoices]
+            self._write_json(self.parsed_text, parsed_output if len(parsed_output) != 1 else parsed_output[0])
+            self._write(
+                self.output_text,
+                f"Loaded {len(self.parsed_invoices)} invoice(s). Click 'Build Payload' to generate JSON.",
+            )
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("Parsing error", str(exc))
 
@@ -482,12 +568,13 @@ class App(tk.Tk):
         return out
 
     def make_payload(self) -> None:
-        if not self.parsed_data:
-            messagebox.showwarning("No data", "Load a tab-delimited file first.")
+        if not self.parsed_invoices:
+            messagebox.showwarning("No data", "Load an invoice file first.")
             return
 
-        self.payload = build_payload(self.parsed_data)
-        self._write_json(self.output_text, self.payload)
+        self.payloads = [build_payload(invoice) for invoice in self.parsed_invoices]
+        self.payload = self.payloads[0] if self.payloads else None
+        self._write_json(self.output_text, self.payloads if len(self.payloads) != 1 else self.payloads[0])
 
     def get_auth_token(self) -> None:
         username = self.username_var.get().strip()
@@ -546,17 +633,18 @@ class App(tk.Tk):
             self._write(self.output_text, f"Error: {exc}")
             messagebox.showerror("Error de autenticación", str(exc))
 
-    def send_request(self) -> None:
-        if not self.payload:
-            messagebox.showwarning("No payload", "Build payload first.")
-            return
+    @staticmethod
+    def _payload_invoice_number(payload: dict[str, Any] | None) -> str:
+        if not payload:
+            return ""
+        return (
+            payload.get("documento", {})
+            .get("datosTransaccion", {})
+            .get("numeroDocumentoFiscal", "")
+        )
 
-        token = self.auth_bearer_var.get().strip()
-        if not token:
-            messagebox.showwarning("Token missing", "Please provide a Bearer token.")
-            return
-
-        body = json.dumps(self.payload).encode("utf-8")
+    def _send_payload(self, payload: dict[str, Any], token: str) -> tuple[bool, str]:
+        body = json.dumps(payload).encode("utf-8")
         req = request.Request(
             self.url_var.get().strip(),
             data=body,
@@ -567,72 +655,71 @@ class App(tk.Tk):
                 "Content-Type": "application/json",
             },
         )
+        invoice_number = self._payload_invoice_number(payload)
 
         try:
             with request.urlopen(req, timeout=45) as resp:
                 status = resp.status
                 response_body = resp.read().decode("utf-8", errors="replace")
                 qr_url = self._extract_qr_url(response_body)
-                invoice_number = (
-                    self.payload.get("documento", {})
-                    .get("datosTransaccion", {})
-                    .get("numeroDocumentoFiscal", "")
-                )
                 self._append_activity_entry(
                     invoice_number=invoice_number,
                     status=f"HTTP {status}",
                     endpoint=self.url_var.get().strip(),
-                    request_payload=self.payload,
+                    request_payload=payload,
                     response_body=response_body,
                 )
-                self._write(
-                    self.output_text,
-                    f"\n\nResponse:\n{response_body}"
-                    f"HTTP {status}\n\nRequest payload:\n{json.dumps(self.payload, indent=2, ensure_ascii=False)}"
-                    ,
+                if qr_url and self.auto_open_qr_var.get() and len(self.payloads) == 1:
+                    webbrowser.open(qr_url)
+                return True, (
+                    f"Invoice {invoice_number}: HTTP {status}\n"
+                    f"Response:\n{response_body}\n\n"
+                    f"Request payload:\n{json.dumps(payload, indent=2, ensure_ascii=False)}"
                 )
-                messagebox.showinfo("Success", f"Request completed with HTTP {status}")
-                if qr_url:
-                    if self.auto_open_qr_var.get():
-                        webbrowser.open(qr_url)
-                        messagebox.showinfo("QR abierto", f"Se abrió el enlace QR en tu navegador:\n{qr_url}")
-                    else:
-                        messagebox.showinfo("QR disponible", f"Enlace QR recibido:\n{qr_url}")
         except error.HTTPError as exc:
             error_body = exc.read().decode("utf-8", errors="replace")
-            invoice_number = ""
-            if self.payload:
-                invoice_number = (
-                    self.payload.get("documento", {})
-                    .get("datosTransaccion", {})
-                    .get("numeroDocumentoFiscal", "")
-                )
             self._append_activity_entry(
                 invoice_number=invoice_number,
                 status=f"HTTPError {exc.code}",
                 endpoint=self.url_var.get().strip(),
-                request_payload=self.payload,
+                request_payload=payload,
                 response_body=error_body,
             )
-            self._write(self.output_text, f"HTTPError {exc.code}\n{error_body}")
-            messagebox.showerror("HTTP Error", f"{exc.code}: {exc.reason}")
+            return False, f"Invoice {invoice_number}: HTTPError {exc.code}\n{error_body}"
         except Exception as exc:  # noqa: BLE001
-            invoice_number = ""
-            if self.payload:
-                invoice_number = (
-                    self.payload.get("documento", {})
-                    .get("datosTransaccion", {})
-                    .get("numeroDocumentoFiscal", "")
-                )
             self._append_activity_entry(
                 invoice_number=invoice_number,
                 status="Request Error",
                 endpoint=self.url_var.get().strip(),
-                request_payload=self.payload,
+                request_payload=payload,
                 response_body=str(exc),
             )
-            self._write(self.output_text, f"Error: {exc}")
-            messagebox.showerror("Request Error", str(exc))
+            return False, f"Invoice {invoice_number}: Request Error\n{exc}"
+
+    def send_request(self) -> None:
+        if not self.payloads:
+            messagebox.showwarning("No payload", "Build payload first.")
+            return
+
+        token = self.auth_bearer_var.get().strip()
+        if not token:
+            messagebox.showwarning("Token missing", "Please provide a Bearer token.")
+            return
+
+        results = []
+        success_count = 0
+        for payload in self.payloads:
+            success, result = self._send_payload(payload, token)
+            success_count += int(success)
+            results.append(result)
+            self._write(self.output_text, "\n\n---\n\n".join(results))
+            self.update_idletasks()
+
+        total = len(self.payloads)
+        if success_count == total:
+            messagebox.showinfo("Success", f"Sent {success_count} of {total} invoice request(s).")
+        else:
+            messagebox.showwarning("Completed with errors", f"Sent {success_count} of {total} invoice request(s).")
 
     def _append_activity_entry(
         self,
@@ -728,7 +815,13 @@ class App(tk.Tk):
             self.log_detail_text = None
             return
 
-        for invoice_number, entries in sorted(self.activity_log.items()):
+        sorted_logs = sorted(
+            self.activity_log.items(),
+            key=lambda item: item[1][0].get("timestamp", ""),
+            reverse=True
+        )
+
+        for invoice_number, entries in sorted_logs:
             for index, entry in enumerate(entries):
                 self.log_tree.insert(
                     "",
