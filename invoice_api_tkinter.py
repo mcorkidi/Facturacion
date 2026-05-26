@@ -52,14 +52,19 @@ class InvoiceParser:
 
     @staticmethod
     def _to_float(raw: str) -> float:
-        clean = raw.replace(",", "").replace("$", "").strip()
-        if not clean:
+        try:
+            clean = raw.replace(",", "").replace("$", "").strip()
+            if not clean:
+                return 0.0
+            return round(float(clean), 2)
+        except ValueError as error:
+            print(f"Error parsing float from '{raw}': {error}")
             return 0.0
-        return round(float(clean), 2)
 
     @staticmethod
     def _normalize_space(value: str) -> str:
         return " ".join(value.split())
+
 
     @classmethod
     def parse_file(cls, file_path: str | Path) -> list[dict[str, Any]]:
@@ -71,11 +76,11 @@ class InvoiceParser:
                 dialect = csv.Sniffer().sniff(sample, delimiters=";\t,")
             except csv.Error:
                 dialect = csv.excel_tab
-
         if dialect.delimiter == ";":
             return cls.parse_csv_file(path)
         return [cls.parse_tab_file(path)]
 
+    
     @classmethod
     def parse_csv_file(cls, file_path: str | Path) -> list[dict[str, Any]]:
         invoices: dict[str, dict[str, Any]] = {}
@@ -83,54 +88,60 @@ class InvoiceParser:
         with open(file_path, "r", encoding="latin-1", newline="") as f:
             reader = csv.DictReader(f, delimiter=";")
             for row in reader:
-                invoice_number = cls._normalize_space(row.get("Numero de factura", ""))
-                if not invoice_number:
-                    continue
+                try:    
+                    # print(f"DEBUG: Processing row: {row}")  # Debug print to trace row processing
+                    invoice_number = cls._normalize_space(row.get("Numero de factura", ""))
+                    if not invoice_number:
+                        continue
 
-                invoice = invoices.setdefault(
-                    invoice_number,
-                    {
-                        "invoice_number": invoice_number,
-                        "issue_date": cls._normalize_space(row.get("Fecha", "")),
-                        "customer_name": cls._normalize_space(row.get("Nombre del cliente", "")),
-                        "country": cls._normalize_space(row.get("Pais", "")),
-                        "payment_terms": "",
-                        "subtotal": cls._to_float(row.get("Subtotal", "")),
-                        "gastos": 0.0,
-                        "grand_total": cls._to_float(row.get("Total", "")),
-                        "items": [],
-                        "_expenses_added": False,
-                    },
-                )
-
-                invoice["items"].append(
-                    InvoiceItem(
-                        codigo=cls._normalize_space(row.get("Referencia", "")),
-                        descripcion=cls._normalize_space(row.get("Descripcion", "")),
-                        cantidad=cls._to_float(row.get("Cantidad", "")),
-                        unidad=cls._normalize_space(row.get("Unidad", "")) or "und",
-                        precio_unitario=cls._to_float(row.get("Precio", "")),
-                        total=cls._to_float(row.get("Total de linea", "")),
+                    invoice = invoices.setdefault(
+                        invoice_number,
+                        {
+                            "invoice_number": invoice_number,
+                            "issue_date": cls._normalize_space(row.get("Fecha", "")),
+                            "customer_name": cls._normalize_space(row.get("Nombre del cliente", "")),
+                            "country": cls._normalize_space(row.get("Pais", "")),
+                            "payment_terms": "",
+                            "subtotal": cls._to_float(row.get("Subtotal", "")),
+                            "gastos": 0.0,
+                            "grand_total": cls._to_float(row.get("Total", "")),
+                            "items": [],
+                            "_expenses_added": False,
+                        },
                     )
-                )
 
-                if not invoice["_expenses_added"]:
-                    for idx in range(1, 4):
-                        expense_name = cls._normalize_space(row.get(f"Gasto {idx}", ""))
-                        expense_amount = cls._to_float(row.get(f"Monto Gasto {idx}", ""))
-                        if expense_name and expense_amount:
-                            invoice["gastos"] += expense_amount
-                            invoice["items"].append(
-                                InvoiceItem(
-                                    codigo=expense_name,
-                                    descripcion=expense_name,
-                                    cantidad=1.0,
-                                    unidad="und",
-                                    precio_unitario=expense_amount,
-                                    total=expense_amount,
+                    invoice["items"].append(
+                        InvoiceItem(
+                            codigo=cls._normalize_space(row.get("Referencia", "")),
+                            descripcion=cls._normalize_space(row.get("Descripcion", "")),
+                            cantidad=cls._to_float(row.get("Cantidad", "")),
+                            unidad=cls._normalize_space(row.get("Unidad", "")) or "und",
+                            precio_unitario=cls._to_float(row.get("Precio", "")),
+                            total=cls._to_float(row.get("Total de linea", "")),
+                        )
+                    )
+
+                    if not invoice["_expenses_added"]:
+                        for idx in range(1, 4):
+                            expense_name = cls._normalize_space(row.get(f"Gasto {idx}", ""))
+                            expense_amount = cls._to_float(row.get(f"Monto Gasto {idx}", ""))
+                            if expense_name and expense_amount:
+                                invoice["gastos"] += expense_amount
+                                invoice["items"].append(
+                                    InvoiceItem(
+                                        codigo=expense_name,
+                                        descripcion=expense_name,
+                                        cantidad=1.0,
+                                        unidad="und",
+                                        precio_unitario=expense_amount,
+                                        total=expense_amount,
+                                    )
                                 )
-                            )
-                    invoice["_expenses_added"] = True
+                        invoice["_expenses_added"] = True
+                except Exception as exc:  # noqa: BLE001
+                    print(f"Error processing row {row}: {exc}")
+
+                    continue    
 
         parsed_invoices = list(invoices.values())
         for invoice in parsed_invoices:
@@ -255,13 +266,7 @@ class InvoiceParser:
 
 
 def build_payload(parsed: dict[str, Any]) -> dict[str, Any]:
-    # try:
-    #     panama_tz = ZoneInfo("America/Panama")
-    # except ZoneInfoNotFoundError:
-    #     panama_tz = timezone(timedelta(hours=-5))
-    # fecha_emision = datetime.now(panama_tz).isoformat(timespec="seconds")
-    # issue_date = parsed.get("issue_date") or datetime.now().strftime("%d-%b-%y").upper()
-    # Input date
+
     date_str = parsed["issue_date"]
 
     # Step 1: Parse date (day-month-year with abbreviated month)
@@ -271,7 +276,10 @@ def build_payload(parsed: dict[str, Any]) -> dict[str, Any]:
     now = datetime.now()
 
     # Replace with current time
-    dt = dt.replace(hour=now.hour, minute=now.minute, second=now.second)
+    try:
+        dt = dt.replace(hour=now.hour, minute=now.minute, second=now.second)
+    except ValueError as error:
+        print(f"Error replacing time in datetime: {error}")
 
     # Step 3: Add timezone (example: -05:00)
     timezone = pytz.timezone("Etc/GMT+5")  # GMT+5 corresponds to -05:00 offset
@@ -279,12 +287,16 @@ def build_payload(parsed: dict[str, Any]) -> dict[str, Any]:
 
     # Step 4: Convert to ISO 8601 string
     fecha_emision = dt.isoformat()
-    
+    unidad_map = {
+            "DOC": "Docena",
+            "SET": "und",
+            "PZA": "und",
+        }
     items = [
         {
             "descripcion": i.descripcion,
             "codigo": i.codigo,
-            "unidadMedida": "Docena" if i.unidad == "DOC" else i.unidad,
+            "unidadMedida": unidad_map.get(i.unidad, i.unidad),
             "cantidad": f"{i.cantidad:.3f}",
             "precioUnitario": f"{i.precio_unitario:.2f}",
             "precioUnitarioDescuento": "", 
@@ -404,7 +416,7 @@ class App(tk.Tk):
         self.password_var = tk.StringVar(value="")
         self.auth_bearer_var = tk.StringVar(value=TOKEN_DEFAULT)
         self.file_var = tk.StringVar(value="")
-        self.auto_open_qr_var = tk.BooleanVar(value=True)
+        self.auto_open_qr_var = tk.BooleanVar(value=False)
 
         self._build_ui()
         self._load_saved_credentials()
@@ -674,7 +686,7 @@ class App(tk.Tk):
                 return True, (
                     f"Invoice {invoice_number}: HTTP {status}\n"
                     f"Response:\n{response_body}\n\n"
-                    f"Request payload:\n{json.dumps(payload, indent=2, ensure_ascii=False)}"
+                    # f"Request payload:\n{json.dumps(payload, indent=2, ensure_ascii=False)}"
                 )
         except error.HTTPError as exc:
             error_body = exc.read().decode("utf-8", errors="replace")
@@ -765,39 +777,248 @@ class App(tk.Tk):
 
         win = tk.Toplevel(self)
         win.title("Activity Log")
-        win.geometry("1000x600")
+        win.geometry("1400x860")
 
         paned = ttk.Panedwindow(win, orient="horizontal")
         paned.pack(fill="both", expand=True, padx=10, pady=10)
 
-        left = ttk.Labelframe(paned, text="Requests by Invoice Number")
-        right = ttk.Labelframe(paned, text="Selected Response Detail")
-        paned.add(left, weight=1)
-        paned.add(right, weight=2)
+        left = ttk.Labelframe(
+            paned,
+            text="Requests by Invoice Number",
+        )
+
+        right = ttk.Labelframe(
+            paned,
+            text="Selected Response Detail",
+        )
+
+        paned.add(left, weight=2)
+        paned.add(right, weight=1)
+
+        #
+        # LEFT SIDE - TREEVIEW + SCROLLBAR
+        #
+
+        tree_frame = ttk.Frame(left)
+        tree_frame.pack(fill="both", expand=True)
 
         columns = ("invoice", "timestamp", "status", "qr")
-        self.log_tree = ttk.Treeview(left, columns=columns, show="headings")
-        self.log_tree.heading("invoice", text="Invoice")
-        self.log_tree.heading("timestamp", text="Timestamp")
-        self.log_tree.heading("status", text="Status")
-        self.log_tree.heading("qr", text="QR Link")
-        self.log_tree.column("invoice", width=180, anchor="w")
-        self.log_tree.column("timestamp", width=180, anchor="w")
-        self.log_tree.column("status", width=140, anchor="w")
-        self.log_tree.column("qr", width=360, anchor="w")
-        self.log_tree.pack(fill="both", expand=True)
-        self.log_tree.bind("<<TreeviewSelect>>", self._on_log_select)
-        self.log_tree.bind("<Double-1>", self._on_log_double_click)
 
-        self.log_detail_text = tk.Text(right, wrap="word")
-        self.log_detail_text.pack(fill="both", expand=True)
+        self.log_tree = ttk.Treeview(
+            tree_frame,
+            columns=columns,
+            show="headings",
+        )
+
+        #
+        # Scrollbar
+        #
+
+        tree_scroll = ttk.Scrollbar(
+            tree_frame,
+            orient="vertical",
+            command=self.log_tree.yview,
+        )
+
+        self.log_tree.configure(
+            yscrollcommand=tree_scroll.set
+        )
+
+        #
+        # Row styling
+        #
+
+        self.log_tree.tag_configure(
+            "missing_qr",
+            background="#ffb3b3",
+        )
+
+        #
+        # Sort state
+        #
+
+        self._log_sort_reverse = {}
+
+        #
+        # Sorting
+        #
+
+        def sort_treeview(col: str) -> None:
+            reverse = self._log_sort_reverse.get(col, False)
+
+            items = [
+                (self.log_tree.set(item, col), item)
+                for item in self.log_tree.get_children("")
+            ]
+
+            if col == "timestamp":
+                try:
+                    from datetime import datetime
+
+                    items.sort(
+                        key=lambda t: datetime.fromisoformat(t[0]),
+                        reverse=reverse,
+                    )
+                except Exception:
+                    items.sort(
+                        key=lambda t: t[0],
+                        reverse=reverse,
+                    )
+            else:
+                items.sort(
+                    key=lambda t: t[0].lower(),
+                    reverse=reverse,
+                )
+
+            for index, (_, item) in enumerate(items):
+                self.log_tree.move(item, "", index)
+
+            self._log_sort_reverse[col] = not reverse
+
+        #
+        # Headings
+        #
+
+        self.log_tree.heading(
+            "invoice",
+            text="Invoice",
+            command=lambda: sort_treeview("invoice"),
+        )
+
+        self.log_tree.heading(
+            "timestamp",
+            text="Timestamp",
+            command=lambda: sort_treeview("timestamp"),
+        )
+
+        self.log_tree.heading(
+            "status",
+            text="Status",
+            command=lambda: sort_treeview("status"),
+        )
+
+        self.log_tree.heading(
+            "qr",
+            text="QR Link",
+            command=lambda: sort_treeview("qr"),
+        )
+
+        #
+        # Columns
+        #
+
+        self.log_tree.column(
+            "invoice",
+            width=100,
+            minwidth=80,
+            stretch=True,
+            anchor="w",
+        )
+
+        self.log_tree.column(
+            "timestamp",
+            width=160,
+            minwidth=120,
+            stretch=True,
+            anchor="w",
+        )
+
+        self.log_tree.column(
+            "status",
+            width=80,
+            minwidth=60,
+            stretch=True,
+            anchor="w",
+        )
+
+        self.log_tree.column(
+            "qr",
+            width=220,
+            minwidth=160,
+            stretch=True,
+            anchor="w",
+        )
+
+        #
+        # Pack tree + scrollbar
+        #
+
+        self.log_tree.pack(
+            side="left",
+            fill="both",
+            expand=True,
+        )
+
+        tree_scroll.pack(
+            side="right",
+            fill="y",
+        )
+
+        #
+        # Events
+        #
+
+        self.log_tree.bind(
+            "<<TreeviewSelect>>",
+            self._on_log_select,
+        )
+
+        self.log_tree.bind(
+            "<Double-1>",
+            self._on_log_double_click,
+        )
+
+        #
+        # RIGHT SIDE - TEXT + SCROLLBAR
+        #
+
+        text_frame = ttk.Frame(right)
+        text_frame.pack(fill="both", expand=True)
+
+        self.log_detail_text = tk.Text(
+            text_frame,
+            wrap="word",
+        )
+
+        text_scroll = ttk.Scrollbar(
+            text_frame,
+            orient="vertical",
+            command=self.log_detail_text.yview,
+        )
+
+        self.log_detail_text.configure(
+            yscrollcommand=text_scroll.set
+        )
+
+        self.log_detail_text.pack(
+            side="left",
+            fill="both",
+            expand=True,
+        )
+
+        text_scroll.pack(
+            side="right",
+            fill="y",
+        )
+
+        #
+        # Window close handling
+        #
 
         def _on_close() -> None:
             self.log_tree = None
             self.log_detail_text = None
             win.destroy()
 
-        win.protocol("WM_DELETE_WINDOW", _on_close)
+        win.protocol(
+            "WM_DELETE_WINDOW",
+            _on_close,
+        )
+
+        #
+        # Load data
+        #
+
         self._refresh_activity_tree()
 
     def _refresh_activity_tree(self) -> None:
