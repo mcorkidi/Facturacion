@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import pycountry
 import pytz
 
-DEMO_ON = False
+DEMO_ON = True
 if not DEMO_ON:
     API_URL_DEFAULT = "https://integracion.ebi-pac.com/api/Enviar"
     AUTH_URL_DEFAULT = "https://integracion.ebi-pac.com/api/Autenticacion"
@@ -78,7 +78,7 @@ class InvoiceParser:
                 dialect = csv.excel_tab
         if dialect.delimiter == ";":
             return cls.parse_csv_file(path)
-        return [cls.parse_tab_file(path)]
+        # return [cls.parse_tab_file(path)]
 
     
     @classmethod
@@ -100,16 +100,17 @@ class InvoiceParser:
                             "invoice_number": invoice_number,
                             "issue_date": cls._normalize_space(row.get("Fecha", "")),
                             "customer_name": cls._normalize_space(row.get("Nombre del cliente", "")),
-                            "country": cls._normalize_space(row.get("Pais", "")),
+                            "country": cls._normalize_space(row.get("Pais", "")) ,
                             "payment_terms": "",
                             "subtotal": cls._to_float(row.get("Subtotal", "")),
                             "gastos": 0.0,
                             "grand_total": cls._to_float(row.get("Total", "")),
                             "items": [],
                             "_expenses_added": False,
+                            
                         },
                     )
-
+                    print(f"Debug: { cls._normalize_space(row.get("Unidad", ""))}")
                     invoice["items"].append(
                         InvoiceItem(
                             codigo=cls._normalize_space(row.get("Referencia", "")),
@@ -137,6 +138,8 @@ class InvoiceParser:
                                         total=expense_amount,
                                     )
                                 )
+                        discount_amount = f"{cls._to_float(row.get('Monto Descuento', '')):.2f}"
+                        invoice["descuento"] = discount_amount
                         invoice["_expenses_added"] = True
                 except Exception as exc:  # noqa: BLE001
                     print(f"Error processing row {row}: {exc}")
@@ -151,119 +154,123 @@ class InvoiceParser:
 
         return parsed_invoices
 
-    @classmethod
-    def parse_tab_file(cls, file_path: str | Path) -> dict[str, Any]:
-        invoice_number = ""
-        issue_date = ""
-        customer_name = ""
-        payment_terms = ""
-        country = ""
-        items: list[InvoiceItem] = []
-        subtotal = 0.0
-        grand_total = 0.0
-        gastos_total = 0.0
-        gastos = 0.0
-        item_header_index: dict[str, int] | None = None
+    # @classmethod
+    # def parse_tab_file(cls, file_path: str | Path) -> dict[str, Any]:
+    #     invoice_number = ""
+    #     issue_date = ""
+    #     customer_name = ""
+    #     payment_terms = ""
+    #     country = ""
+    #     items: list[InvoiceItem] = []
+    #     subtotal = 0.0
+    #     grand_total = 0.0
+    #     gastos_total = 0.0
+    #     gastos = 0.0
+    #     item_header_index: dict[str, int] | None = None
 
-        with open(file_path, "r", encoding="latin-1", newline="") as f:
-            reader = csv.reader(f, delimiter="\t")
-            for row in reader:
-                normalized_row = [cls._normalize_space(c) for c in row]
-                cells = [c for c in normalized_row if c]
-                # print(f"DEBUG: Processing row: {cells}")  # Debug print to trace row processing
-                if not cells and item_header_index is None:
-                    continue
+    #     with open(file_path, "r", encoding="latin-1", newline="") as f:
+    #         reader = csv.reader(f, delimiter="\t")
+    #         for row in reader:
+    #             normalized_row = [cls._normalize_space(c) for c in row]
+    #             cells = [c for c in normalized_row if c]
+    #             # print(f"DEBUG: Processing row: {cells}")  # Debug print to trace row processing
+    #             if not cells and item_header_index is None:
+    #                 continue
 
-                if not invoice_number and "Factura Comercial No." in cells:
-                    idx = cells.index("Factura Comercial No.")
-                    if idx + 3 < len(cells):
-                        invoice_number = cells[idx + 3]
+    #             if not invoice_number and "Factura Comercial No." in cells:
+    #                 idx = cells.index("Factura Comercial No.")
+    #                 if idx + 3 < len(cells):
+    #                     invoice_number = cells[idx + 3]
 
-                if not issue_date and "Fecha Factura" in cells:
-                    idx = cells.index("Fecha Factura")
-                    if idx + 1 < len(cells):
-                        issue_date = cells[idx + 1]
+    #             if not issue_date and "Fecha Factura" in cells:
+    #                 idx = cells.index("Fecha Factura")
+    #                 if idx + 1 < len(cells):
+    #                     issue_date = cells[idx + 1]
 
-                if not customer_name and "Cliente" in cells:
-                    idx = cells.index("Cliente")
-                    if idx + 2 < len(cells):
-                        customer_name = cells[idx + 2]
+    #             if not customer_name and "Cliente" in cells:
+    #                 idx = cells.index("Cliente")
+    #                 if idx + 2 < len(cells):
+    #                     customer_name = cells[idx + 2]
                 
-                if not country and "Cliente" in cells:
-                    idx = cells.index("Cliente")
-                    if idx + 4 < len(cells):
-                        country = cells[idx + 4]
+    #             if not country and "Cliente" in cells:
+    #                 idx = cells.index("Cliente")
+    #                 if idx + 4 < len(cells):
+    #                     country = cells[idx + 4]
 
-                if not payment_terms and "Condiciones de pago" in cells:
-                    idx = cells.index("Condiciones de pago")
-                    if idx + 3 < len(cells):
-                        payment_terms = cells[idx + 3]
+    #             if not payment_terms and "Condiciones de pago" in cells:
+    #                 idx = cells.index("Condiciones de pago")
+    #                 if idx + 3 < len(cells):
+    #                     payment_terms = cells[idx + 3]
 
-                if "Subtotal Neto:" in cells:
-                    sub_idx = cells.index("Subtotal Neto:")
-                    if sub_idx + 1 < len(cells):
-                        subtotal = cls._to_float(cells[sub_idx + 1])
+    #             if "Subtotal Neto:" in cells:
+    #                 sub_idx = cells.index("Subtotal Neto:")
+    #                 if sub_idx + 1 < len(cells):
+    #                     subtotal = cls._to_float(cells[sub_idx + 1])
 
-                if "Monto Total :" in cells:
-                    total_idx = cells.index("Monto Total :")
-                    if total_idx + 1 < len(cells):
-                        grand_total = cls._to_float(cells[total_idx + 1])
+    #             if "Monto Total :" in cells:
+    #                 total_idx = cells.index("Monto Total :")
+    #                 if total_idx + 1 < len(cells):
+    #                     grand_total = cls._to_float(cells[total_idx + 1])
 
-                if "Cubicaje:" not in cells:
-                    code = cells[cells.index("Total")+7] if len(cells) > 0 else ""
-                    description = cells[cells.index("Total")+8] if len(cells) > 0 else ""  
-                    quantity = cls._to_float(cells[cells.index("Total")+9]) if len(cells) > 0 else 0.0
-                    unit = "Docena"
-                    price = cls._to_float(cells[cells.index("Total")+13]) if len(cells) > 0 else 0.0
-                    line_total = cls._to_float(cells[cells.index("Total")+14]) if len(cells) > 0 else 0.0
-                    # print(f"DEBUG: Parsed item - Code: {code}, Description: {description}, Quantity: {quantity}, Unit: {unit}, Price: {price}, Total: {line_total}")  # Debug print to trace item parsing
-                    if cells[cells.index("Total")+11] != "0":
-                        quantity += (float(cells[cells.index("Total")+11])/12)
-                    items.append(
-                            InvoiceItem(
-                                codigo=code,
-                                descripcion=description,
-                                cantidad=quantity,
-                                unidad=unit,
-                                precio_unitario=price,
-                                total=line_total,
-                            )
-                        )
+    #             if "Cubicaje:" not in cells:
+    #                 code = cells[cells.index("Total")+7] if len(cells) > 0 else ""
+    #                 description = cells[cells.index("Total")+8] if len(cells) > 0 else ""  
+    #                 quantity = cls._to_float(cells[cells.index("Total")+9]) if len(cells) > 0 else 0.0
+    #                 unit = "Docena"
+    #                 price = cls._to_float(cells[cells.index("Total")+13]) if len(cells) > 0 else 0.0
+    #                 line_total = cls._to_float(cells[cells.index("Total")+14]) if len(cells) > 0 else 0.0
+    #                 # print(f"DEBUG: Parsed item - Code: {code}, Description: {description}, Quantity: {quantity}, Unit: {unit}, Price: {price}, Total: {line_total}")  # Debug print to trace item parsing
+    #                 if cells[cells.index("Total")+11] != "0":
+    #                     quantity += (float(cells[cells.index("Total")+11])/12)
+    #                 items.append(
+    #                         InvoiceItem(
+    #                             codigo=code,
+    #                             descripcion=description,
+    #                             cantidad=quantity,
+    #                             unidad=unit,
+    #                             precio_unitario=price,
+    #                             total=line_total,
+    #                         )
+    #                     )
 
-                if "Total de bultos:" in cells:
-                            # print(f"DEBUG: Found 'Total de bultos:' in row, processing gastos - Cells: {cells}")  # print to trace gastos processing
-                            sub_idx = cells.index("Total de bultos:")
-                            if sub_idx + 3 < len(cells):
-                                gastos = cls._to_float(cells[sub_idx - 2])
-                                gastos_total += gastos
-                                items.append(
-                                    InvoiceItem(
-                                        codigo=cells[sub_idx - 3],
-                                        descripcion=cells[sub_idx - 3],
-                                        cantidad=1.0,
-                                        unidad="und",
-                                        precio_unitario=gastos,
-                                        total=gastos,
-                                    )
-                                )
+    #             if "Total de bultos:" in cells:
+    #                         # print(f"DEBUG: Found 'Total de bultos:' in row, processing gastos - Cells: {cells}")  # print to trace gastos processing
+    #                         sub_idx = cells.index("Total de bultos:")
+    #                         if sub_idx + 3 < len(cells):
+    #                             gastos = cls._to_float(cells[sub_idx - 2])
+    #                             gastos_total += gastos
+    #                             items.append(
+    #                                 InvoiceItem(
+    #                                     codigo=cells[sub_idx - 3],
+    #                                     descripcion=cells[sub_idx - 3],
+    #                                     cantidad=1.0,
+    #                                     unidad="und",
+    #                                     precio_unitario=gastos,
+    #                                     total=gastos,
+    #                                 )
+    #                             )
         
        
 
-        if not grand_total:
-            grand_total = subtotal + gastos_total
+    #     if not grand_total:
+    #         grand_total = subtotal + gastos_total
 
-        return {
-            "invoice_number": invoice_number,
-            "issue_date": issue_date,
-            "customer_name": customer_name,
-            "country": country,
-            "payment_terms": payment_terms,
-            "subtotal": subtotal,
-            "gastos": gastos_total,
-            "grand_total": grand_total,
-            "items": items,
-        }
+    #     return {
+    #         "invoice_number": invoice_number,
+    #         "issue_date": issue_date,
+    #         "customer_name": customer_name,
+    #         "country": country,
+    #         "payment_terms": payment_terms,
+    #         "subtotal": subtotal,
+    #         "gastos": gastos_total,
+    #         "grand_total": grand_total,
+    #         "items": items,
+    #     }
 
+def getQuantity(quantity: float, unit: str) -> float:
+    if unit == "DOC":
+        return round(quantity / 12, 3)
+    return quantity
 
 def build_payload(parsed: dict[str, Any]) -> dict[str, Any]:
 
@@ -297,18 +304,33 @@ def build_payload(parsed: dict[str, Any]) -> dict[str, Any]:
             "descripcion": i.descripcion,
             "codigo": i.codigo,
             "unidadMedida": unidad_map.get(i.unidad, i.unidad),
-            "cantidad": f"{i.cantidad:.3f}",
+            "cantidad": f"{getQuantity(i.cantidad, i.unidad):.3f}",
             "precioUnitario": f"{i.precio_unitario:.2f}",
-            "precioUnitarioDescuento": "", 
+            "precioUnitarioDescuento": "0.00", 
             "precioItem": f"{i.total:.2f}",
             "valorTotal": f"{i.total:.2f}",
             "tasaITBMS": "00",
             "valorITBMS": "00.00",
-            
         }
         for i in parsed["items"]
 
     ]
+
+    # if parsed.get("descuento", 0.0) > 0:
+    #     items.append(
+    #         {
+    #             "descripcion": "Descuento",
+    #             "codigo": "DESCUENTO",
+    #             "unidadMedida": "und",
+    #             "cantidad": "1.000",
+    #             "precioUnitario": "0.00",
+    #             "precioUnitarioDescuento": f"{parsed['descuento']:.2f}", 
+    #             "precioItem": "0.00",
+    #             "valorTotal": f"-{parsed['descuento']:.2f}",
+    #             "tasaITBMS": "00",
+    #             "valorITBMS": "00.00",
+    #         }
+    #     )
     # print(f"DEBUG: Built items for payload: {items}")  # Debug print to trace item building
     try:
         country_code = pycountry.countries.search_fuzzy(parsed.get("country", "PA"))[0].alpha_2
@@ -374,22 +396,31 @@ def build_payload(parsed: dict[str, Any]) -> dict[str, Any]:
             },
             "listaItems": items,
             "totalesSubTotales": {
-                "totalPrecioNeto": f"{parsed['grand_total']:.2f}",
+                "totalPrecioNeto": f"{sum(i.total for i in parsed['items']):.2f}",
                 "totalITBMS": "0.00",
                 "totalMontoGravado": "0.00",
+                "totalDescuento" : f"{parsed['descuento'] if 'descuento' in parsed else 0.00}",
                 "totalFactura": f"{parsed['grand_total']:.2f}",
+                # "totalFactura": f"{sum(i.total for i in parsed['items']):.2f}",
+                # "totalValorRecibido": f"{parsed['grand_total']:.2f}",
+                # "totalValorRecibido": f"{sum(i.total for i in parsed['items']):.2f}",
                 "totalValorRecibido": f"{parsed['grand_total']:.2f}",
                 "tiempoPago": "1",
                 "nroItems": str(len(items)),
                 "totalTodosItems": f"{sum(i.total for i in parsed['items']):.2f}",
-                "totalOtrosGastos": parsed['gastos'] if 'gastos' in parsed else "0.00",
+                "totalOtrosGastos": f"{parsed['gastos'] if 'gastos' in parsed else 0.00}",
+                "listaDescBonificacion":[ {
+                                "descDescuento" : "Descuento",
+                                "montoDescuento" : f"{parsed['descuento'] if 'descuento' in parsed else 0.00}",
+                            }],
                 "listaFormaPago": [
                     {
                         "formaPagoFact": "08",
                         "valorCuotaPagada": f"{parsed['grand_total']:.2f}",
                     }
-                ],
+                ]
             },
+            
         }
     }
     return payload
@@ -690,6 +721,7 @@ class App(tk.Tk):
                 )
         except error.HTTPError as exc:
             error_body = exc.read().decode("utf-8", errors="replace")
+            print(f"DEBUG: HTTPError {exc.code} for invoice {invoice_number}. Response body: {error_body}")  # Debug print to trace HTTP errors
             self._append_activity_entry(
                 invoice_number=invoice_number,
                 status=f"HTTPError {exc.code}",
